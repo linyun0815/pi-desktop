@@ -2,31 +2,58 @@
 
 A desktop GUI for the [Pi coding agent](https://pi.dev). Chat, manage projects, browse files, run commands, and install packages in one window.
 
+![Status](https://img.shields.io/badge/status-alpha-orange) ![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)
+
 ![Pi Desktop — Home launcher screen](docs/screenshots/Screenshot_20260824_181929.png)
 
 Still in alpha, so expect rough edges.
 
+## Contents
+
+- [What it does](#what-it-does)
+- [Review rail](#review-rail)
+- [Pi and OMP engines](#pi-and-omp-engines)
+- [Permissions](#permissions)
+- [Custom themes](#custom-themes)
+- [Multi-Agent Council Planning](#multi-agent-council-planning)
+- [Getting started](#getting-started)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Build it yourself](#build-it-yourself)
+- [License](#license)
+- [Links](#links)
+
 ## What it does
+
+### Chat and rendering
 
 - Streaming chat with thinking blocks, tool use, and rich rendering: bundled fonts and color emoji, inline SVG preview, and clickable file links that open a preview pane. Consecutive tool calls fold into collapsible groups. File reads show as line-numbered, syntax-highlighted code and edits as diffs
 - Find within a conversation (`Ctrl/Cmd+F`); streaming follows new output only while you're at the bottom, with a jump-to-bottom control
 - Composer file mentions (type `@` to insert a path reference for Pi to read) and `Up`/`Down` to recall prompts sent in the current session
-- Home dashboard with usage stats: messages, tokens, active-day streaks, peak hour, and a per-model breakdown
-- [Multi-Agent Council Planning](#multi-agent-council-planning), where Pi, Claude, and Codex plan together and reach consensus before Pi builds (opt-in)
-- Quick switcher (`Ctrl/Cmd+K`) for skills, prompt templates, built-in commands, workspaces, sessions, and files; `/` in the composer for commands
-- Skills browser, session fork/branch tree, and one-click context compaction
-- Session naming (read from Pi) with inline rename, and a themed in-app confirmation for delete
-- Custom models & providers editor in Settings, which edits `~/.pi/agent/models.json`
+- Model switching (`Ctrl+P`) with tokenized search, thinking-level control, and live token/cost tracking
+
+### Projects and sessions
+
 - Multiple workspaces, with an independent agent process per live session, so a turn keeps running when you switch away from it; Mission Control and sidebar activity dots surface background work across projects, with optional desktop notifications when a session finishes, fails, or waits for approval
+- Home dashboard with usage stats: messages, tokens, active-day streaks, peak hour, and a per-model breakdown
 - New Task launcher starts a real fresh Pi session in a selected project, optionally in an isolated Git worktree, and sends the issue immediately while work continues in the background; matching task metadata, explicit branches, and GitHub PR URLs reuse an existing local worktree when found
-- Diff Review conveyor with explicit Commit → Push → PR actions, upstream-aware GitHub CLI PR creation, and exact notification clicks back to the finished session
-- Diagnostics view: Pi/OMP install and PATH resolution, provider configuration, permissions, and recent errors
-- Review rail (toggleable) with permissions, approvals, changed files, and session status
+- Session naming (read from Pi) with inline rename, session tags (`#tag-name` in chat), a themed in-app confirmation for delete, and a session fork/branch tree with one-click context compaction
+- Quick switcher (`Ctrl/Cmd+K`) for skills, prompt templates, built-in commands, workspaces, sessions, and files; `/` in the composer for commands
+
+### Planning, review, and safety
+
+- [Multi-Agent Council Planning](#multi-agent-council-planning), where Pi, Claude, and Codex plan together and reach consensus before Pi builds (opt-in)
 - Custom permission rules: allow/deny glob rules per Pi tool that refine the permission modes, with per-workspace rule files, import/export, and live edits that apply without restarting Pi
-- File tree, code/image/PDF/HTML preview panes, code editor (CodeMirror 6 with syntax highlighting), diff viewer, file search
-- Terminal with ANSI colors
-- Package browser connected to pi.dev/packages, with instant local search
-- Session tags, model switching, live-preview settings, themes (7 built-ins plus System, and custom themes you can create in-app, import, export, or install from a URL)
+- Review rail (toggleable) with permissions, approvals, changed files, and session status
+- Diff Review conveyor with explicit Commit → Push → PR actions, upstream-aware GitHub CLI PR creation, and exact notification clicks back to the finished session
+
+### Built-in tools
+
+- File tree with git status badges, code/image/PDF/HTML preview panes, code editor (CodeMirror 6 with syntax highlighting), diff viewer, and file search
+- Terminal with ANSI colors, running your real shell
+- Package browser connected to pi.dev/packages, with instant local search; install and remove packages without leaving the app
+- Skills browser, plus a custom models & providers editor in Settings that edits `~/.pi/agent/models.json`
+- Diagnostics view: Pi/OMP install and PATH resolution, provider configuration, permissions, and recent errors
+- Live-preview settings and themes: 7 built-ins plus System, and custom themes you can create in-app, import, export, or install from a URL
 
 ## Review rail
 
@@ -35,7 +62,7 @@ The right-side Review rail keeps safety and working-tree state visible while you
 Changed files use readable status badges:
 
 | Badge | Meaning |
-|-------|---------|
+| ------- | --------- |
 | `NEW` | Untracked new file |
 | `MOD` | Existing tracked file was modified |
 | `DEL` | Tracked file was deleted |
@@ -56,7 +83,7 @@ OMP's protocol-v2 large-frame transport is negotiated automatically, and model-s
 Four base modes control what Pi may do, selectable from the Review rail or **Settings → Behavior**:
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | Plan / Read-only | Only read/search/list tools are enabled; edits and shell commands are blocked |
 | Ask before edits | Pi asks before file edits and shell commands |
 | Ask before commands | Pi asks before shell commands |
@@ -139,13 +166,19 @@ To use it, type your request with the feature enabled and click **Plan with Coun
 
 ## Getting started
 
-You need Pi installed first:
+### Requirements
 
-```bash
-npm install -g @earendil-works/pi-coding-agent
-```
+- The **Pi CLI**, installed globally and on your PATH:
 
-On Linux, grab the AppImage from [Releases](https://github.com/FaqFirebase/pi-desktop/releases):
+  ```bash
+  npm install -g @earendil-works/pi-coding-agent
+  ```
+
+- Optionally, the `omp` binary from [oh-my-pi](https://github.com/can1357/oh-my-pi) as an alternative engine — see [Pi and OMP engines](#pi-and-omp-engines).
+
+### Linux
+
+Grab the AppImage from [Releases](https://github.com/FaqFirebase/pi-desktop/releases):
 
 ```bash
 chmod +x Pi-Desktop-linux-x64.AppImage
@@ -179,7 +212,7 @@ Download from [Releases](https://github.com/FaqFirebase/pi-desktop/releases): th
 ## Keyboard shortcuts
 
 | Shortcut | What it does |
-|----------|-------------|
+| ---------- | ------------- |
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Up/Down` | Recall previous prompts |
@@ -200,7 +233,7 @@ Download from [Releases](https://github.com/FaqFirebase/pi-desktop/releases): th
 ### Linux / macOS
 
 ```bash
-git clone https://github.com/FaqFirebase/pi-desktop.git
+git clone https://github.com/linyun0815/pi-desktop.git
 cd pi-desktop
 npm install
 npm run dev
@@ -208,7 +241,7 @@ npm run dev
 
 ### Windows
 
-Windows requires extra steps because **node-pty** (the terminal backend) compiles a native module against Electron's ABI.
+Pi Desktop uses the Node-API binaries bundled with `node-pty`, so a normal Windows checkout does not need Visual Studio or a C++ toolchain.
 
 #### 1. Install prerequisites
 
@@ -216,11 +249,8 @@ Install all of the following **before** cloning:
 
 - [Git for Windows](https://git-scm.com/download/win)
 - [Node.js LTS](https://nodejs.org), via the official Windows installer (adds `node` and `npm` to PATH)
-- **Visual Studio Build Tools 2022**, downloaded from [Visual Studio downloads](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-  - Select the **Desktop development with C++** workload
-  - Open **Individual components**, search `Spectre`, and install **Spectre-mitigated libs for v143 toolset**
 
-> **Use VS Build Tools 2022, not 2026.** node-pty requires Spectre-mitigated runtime libraries. VS 2022 stable (v143 toolset) ships them; VS 2026 preview (v180 toolset) does not, and `npm install` will fail with `MSB8040: Spectre-mitigated libraries are required for this project`.
+A native compiler is only needed on a platform/architecture for which `node-pty` does not publish a prebuilt binary. In that case, follow the [`node-pty` build prerequisites](https://github.com/microsoft/node-pty#building).
 
 #### 2. Add a Windows Defender exclusion (recommended)
 
@@ -231,12 +261,12 @@ Settings → Privacy & Security → Windows Security → Virus & threat protecti
 #### 3. Clone and install
 
 ```powershell
-git clone https://github.com/FaqFirebase/pi-desktop.git
+git clone https://github.com/linyun0815/pi-desktop.git
 cd pi-desktop
 npm install
 ```
 
-The postinstall script rebuilds `node-pty` against Electron's ABI and downloads the Electron binary. First install may take a few minutes.
+The postinstall script verifies the bundled `node-pty` native files and the Electron binary. First install may take a few minutes while Electron downloads.
 
 If the Electron binary is missing after install, use the [manual Electron binary download](#manual-electron-binary-download) steps below. This is the confirmed fallback on Windows when Electron's postinstall extraction leaves a partial `dist` folder.
 
@@ -257,8 +287,8 @@ npm run dev
 #### Common Windows errors
 
 | Error | Cause | Fix |
-|-------|-------|-----|
-| `MSB8040`: Spectre libs missing | VS Build Tools 2026 (v180 toolset) installed instead of 2022 (v143) | Uninstall 2026, install VS Build Tools 2022 with Spectre libs for v143 |
+| ------- | ------- | ----- |
+| `MSB8040`: Spectre libs missing | A command forced `node-pty` to rebuild from source | Remove `build-from-source` from npm config and run `npm install`; normal Pi Desktop installs use the bundled Node-API binary |
 | `electron-vite is not recognized` | `npm install` didn't complete | Run `npm install` again |
 | Electron binary missing after install | Electron's postinstall extraction left a partial or missing `dist` folder | Add the repo folder to Defender exclusions, then `npm install` again. If it still fails, use the manual download steps below |
 | `EPERM` / `EACCES` writing a project file | Controlled Folder Access (Ransomware protection) is blocking writes under Documents/Desktop | Keep the repo and your projects out of protected folders, or allow Pi Desktop through Controlled folder access (see below) |
@@ -272,7 +302,7 @@ The reliable fix is to keep code out of protected folders. Clone the repo and pu
 
 ```powershell
 # Not C:\Users\<you>\Documents\... — use an unprotected path:
-git clone https://github.com/FaqFirebase/pi-desktop.git C:\dev\pi-desktop
+git clone https://github.com/linyun0815/pi-desktop.git C:\dev\pi-desktop
 ```
 
 If you must keep code under Documents/Desktop, allow the app instead:
@@ -302,9 +332,18 @@ After this, `npm run dev` should work normally.
 
 > **Note:** Windows builds are community-tested. If you hit an issue not listed above, please [open a bug report](https://github.com/FaqFirebase/pi-desktop/issues).
 
+<details>
+<summary>More screenshots</summary>
+
+![Empty-chat center prompt with project picker](docs/screenshots/Screenshot_20260824_182005.png)
+
+![Workspace layout with terminal and diff viewer](docs/screenshots/Screenshot_20260824_182322.png)
+
+</details>
+
 ## License
 
-Apache 2.0
+[Apache 2.0](LICENSE)
 
 ## Links
 
