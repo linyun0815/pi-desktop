@@ -12,11 +12,12 @@ import {
   applyPermissionModeToStartOptions,
 } from "./pi-start-options";
 import { loadAppSettings } from "./settings";
-import type { WorkspaceTabOptions } from "../../shared/ipc-contracts";
+import type { WorkspaceTabOptions, WorkspaceTrustStatus } from "../../shared/ipc-contracts";
 import { isWithinSessionRoots } from "../pi-paths";
 import { existsSync } from "fs";
 import type { IpcContext } from "./context";
 import { appLog } from "../app-log";
+import { workspaceTrustStore } from "../workspace-trust";
 
 function validateWorkspaceTabOptions(value: unknown): WorkspaceTabOptions {
   if (value === undefined || value === null) return {};
@@ -114,6 +115,65 @@ export function registerWorkspaceHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_GET_ACTIVE, async () => {
     return workspaceManager.getActiveWorkspace();
   });
+
+  // ─── Workspace Trust ────────────────────────────────────────────────────
+  //
+  // One unified switch: trusting a workspace authorizes its project Pi
+  // resources, its permission-rules allow entries, and its interactive HTML
+  // preview. Legacy trust records surface as pendingReconfirmation until the
+  // user re-confirms. Trusting (or revoking) restarts the workspace's live
+  // helpers so the three capability classes take effect together.
+
+  ipcMain.handle(
+    IPC_CHANNELS.WORKSPACE_TRUST_STATUS,
+    async (_event, workspaceId?: unknown): Promise<WorkspaceTrustStatus> => {
+      const workspace = isString(workspaceId)
+        ? workspaceManager.getWorkspaces().find((item) => item.id === workspaceId)
+        : workspaceManager.getActiveWorkspace();
+      if (!workspace) {
+        return { workspacePath: null, trusted: false, pendingReconfirmation: false };
+      }
+      return {
+        workspacePath: workspace.path,
+        ...workspaceTrustStore.status(workspace.path),
+      };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.WORKSPACE_SET_TRUST,
+    async (
+      _event,
+      workspaceId: unknown,
+      trusted: unknown,
+    ): Promise<WorkspaceTrustStatus> => {
+      if (typeof trusted !== "boolean")
+        throw new Error("trusted must be a boolean");
+      const workspace =
+        workspaceManager.getWorkspaces().find((item) => item.id === workspaceId) ??
+        workspaceManager.getActiveWorkspace();
+      if (!workspace) throw new Error("Workspace not found");
+      if (trusted) {
+        await workspaceTrustStore.trust(workspace.path);
+        appLog.info("workspaces", `Workspace trusted: ${workspace.path}`);
+      } else {
+        await workspaceTrustStore.revoke(workspace.path);
+        appLog.info("workspaces", `Workspace trust revoked: ${workspace.path}`);
+      }
+      // The trust decision is baked into each helper's environment at start
+      // (projectTrusted + PI_DESKTOP_WORKSPACE_TRUSTED), so live helpers
+      // restart in both directions: confirming makes project resources,
+      // allow rules, and interactive preview take effect together; revoking
+      // stops an already-trusted helper from lingering with elevated trust.
+      for (const runtime of workspaceManager.getSessionRuntimes(workspace.id)) {
+        void workspaceManager.restartSessionRuntime(runtime.runtimeId).catch(() => undefined);
+      }
+      return {
+        workspacePath: workspace.path,
+        ...workspaceTrustStore.status(workspace.path),
+      };
+    },
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.WORKSPACE_START_PI,

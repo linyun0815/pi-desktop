@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import type { ModelInfo } from "../../../shared/ipc-contracts";
 import { filterModels } from "../utils/model-search";
 import { clsx } from "clsx";
@@ -25,9 +22,8 @@ export function ModelSelector({
   const sessionState = useAppStore((state) => state.sessionState);
   const setModel = useAppStore((state) => state.setModel);
   const piStatus = useAppStore((state) => state.piStatus);
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const settings = useAppStore((state) => state.settings);
 
   const [isOpen, setIsOpen] = useState(false);

@@ -18,10 +18,8 @@ import {
   loadAppSettings,
   saveAppSettings,
 } from "./ipc-handlers";
-import {
-  setPiExecutableOverride,
-  cleanupPiChildTempDir,
-} from "./pi-rpc-manager";
+import { cleanupHelperTempDir } from "./pi-sdk-manager";
+import { shutdownEmbeddedPiAdmin } from "./embedded-pi-admin";
 import { fetchAllCatalogPackages } from "./package-catalog";
 import { activityStatsStore } from "./activity-stats";
 import {
@@ -487,11 +485,9 @@ app.whenReady().then(async () => {
   // Lock the HTML preview partition to local files before any preview can load.
   hardenPreviewSession();
 
-  // Resolve the configured engine before exposing IPC or creating the renderer;
-  // otherwise the renderer can win the startup race and launch the default Pi
-  // binary before this setting is applied.
+  // Settings load for tray defaults; the embedded Pi SDK needs no binary
+  // resolution and no executable override.
   const settings = await loadAppSettings(workspaceManager);
-  setPiExecutableOverride(settings.piExecutablePath, settings.piEngine);
 
   // Register IPC handlers before creating windows. The window getter is a
   // lazy closure — mainWindow is created later and the notification wiring
@@ -585,8 +581,10 @@ app.on("before-quit", (event) => {
   activityStatsStore.flushSync();
   appLog.flushSync();
   workspaceManager?.stopAll();
-  // Windows: GUI-owned Pi TEMP does not get OS cleanup — wipe on quit.
-  cleanupPiChildTempDir();
+  // The admin helper is a separate utility process — tell it to wind down too.
+  void shutdownEmbeddedPiAdmin();
+  // Windows: GUI-owned helper TEMP does not get OS cleanup — wipe on quit.
+  cleanupHelperTempDir();
 });
 
 // Security: prevent new window creation, and stop preview <webview> guests from

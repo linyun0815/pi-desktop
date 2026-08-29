@@ -69,17 +69,9 @@ esac
 
 echo "Platform: $PLATFORM-$ARCH_NAME"
 
-# Check for Pi dependency
-if ! command -v pi &> /dev/null; then
-  echo ""
-  echo "⚠  Pi is not installed."
-  echo "   Installing Pi first..."
-  echo ""
-  curl -fsSL https://pi.dev/install.sh | sh
-  echo ""
-fi
-
-echo "✓ Pi found: $(which pi)"
+# Pi (the coding agent) ships embedded in the desktop app as an SDK — no
+# separate `pi` CLI or system Node installation is needed. npm/git are only
+# required for optional in-app Pi package installs.
 
 # Download the latest release artifact for this platform.
 # Pi Desktop is distributed as a packaged binary, not via npm — see MEMORY.md.

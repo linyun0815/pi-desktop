@@ -12,10 +12,7 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import { getSessionTitle } from "../utils/session-title";
 import { pathsEqual } from "../../../shared/path-compare";
 import { canResumeRun } from "../utils/workflow-runs";
@@ -199,7 +196,7 @@ export function MissionControl(): React.JSX.Element {
                     {!runtime.activity && runtime.status === "running" && (
                       <span
                         className="h-2.5 w-2.5 shrink-0 rounded-full bg-success"
-                        title={`${agentEngineLabel(runtime.engine) ?? DEFAULT_AGENT_ENGINE_LABEL} 当前空闲`}
+                        title={`${DEFAULT_AGENT_ENGINE_LABEL} 当前空闲`}
                       />
                     )}
                     <div className="min-w-0 flex-1">

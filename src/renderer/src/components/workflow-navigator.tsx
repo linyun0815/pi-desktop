@@ -32,10 +32,7 @@ import type {
   WorkflowRunSummary,
 } from "../../../shared/ipc-contracts";
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import {
   canAbortRun,
   canResumeRun,
@@ -905,9 +902,8 @@ function RunDetail({
     text: string;
   } | null>(null);
   const feedbackTimer = useRef<number | null>(null);
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const counts = AgentCounts({ run });
 
   const clearFeedback = (): void => {

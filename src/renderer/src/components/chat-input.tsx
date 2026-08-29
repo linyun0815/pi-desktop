@@ -1,9 +1,6 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import { useChatKeyboard, useCommandCatalog } from "../hooks";
 import { ComposerPermissionMenu } from "./composer-permission-menu";
 import { CommandResults } from "./command-results";
@@ -92,9 +89,8 @@ export function ChatInput(): React.JSX.Element {
   const abort = useAppStore((state) => state.abort);
   const isStreaming = useAppStore((state) => state.isStreaming);
   const piStatus = useAppStore((state) => state.piStatus);
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const pendingInsert = useAppStore((state) => state.pendingInsert);
   const clearPendingInsert = useAppStore((state) => state.clearPendingInsert);
   const setNotePickerOpen = useAppStore((state) => state.setNotePickerOpen);
@@ -407,7 +403,7 @@ export function ChatInput(): React.JSX.Element {
     }
   }, []);
 
-  // A stopped agent stays typable: the first send lazy-starts Pi/OMP.
+  // A stopped agent stays typable: the first send lazy-starts Pi.
   // Only transient/error states block input.
   const isDisabled = piStatus === "starting" || piStatus === "error";
 
@@ -726,7 +722,7 @@ export function ChatInput(): React.JSX.Element {
               className="hover:bg-highlight-strong flex items-center justify-center rounded-md p-1.5 text-dim hover:text-secondary transition-colors disabled:opacity-50"
               title={
                 isDisabled
-                  ? "使用委员会规划前请先启动 Pi/OMP"
+                  ? "使用委员会规划前请先启动 Pi"
                   : "使用委员会规划"
               }
               aria-label="使用委员会规划"

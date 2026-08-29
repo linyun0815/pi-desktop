@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import { StringDecoder } from 'string_decoder'
-import type { CouncilAgentId, ConsensusMode, ConsultantResult, CouncilPiEngine } from '../shared/council-config'
+import type { PiMessageUpdateEvent, PiRpcEvent } from '../shared/ipc-contracts'
+import type { CouncilAgentId, ConsensusMode, ConsultantResult } from '../shared/council-config'
 import {
   buildConsultantPrompt,
   buildConsensusPrompt,
@@ -13,7 +14,7 @@ import {
 } from '../shared/council-config'
 import { detectAgents } from './agent-detection'
 import { escapeCmdSpawn } from './cmd-escape'
-import { getPiCli } from './pi-rpc-manager'
+import { PiSdkManager } from './pi-sdk-manager'
 
 const IS_WINDOWS = process.platform === 'win32'
 const MS_PER_SECOND = 1000
@@ -143,24 +144,104 @@ export async function runArbiter(
  * flags are escaped for the cmd.exe traversal on Windows.
  */
 export function buildConsultantSpawn(
-  id: CouncilAgentId,
+  id: Exclude<CouncilAgentId, 'pi'>,
   executable: string,
   isWindows: boolean,
-  engine: CouncilPiEngine = 'pi',
 ): { file: string; args: string[] } {
-  const command = buildConsultantCommand(id, executable, engine)
+  const command = buildConsultantCommand(id, executable)
   return escapeCmdSpawn(isWindows, command.file, command.args)
 }
 
-/** Default spawn: run the consultant CLI, stream output, enforce timeout. */
-export const defaultSpawnConsultant: SpawnConsultant = (id, prompt, cwd, timeoutMs, onChunk) =>
+/**
+ * Default spawn dispatch: the embedded Pi consultant/arbiter runs on a
+ * short-lived SDK task helper; Claude/Codex remain external CLIs.
+ */
+export const defaultSpawnConsultant: SpawnConsultant = (id, prompt, cwd, timeoutMs, onChunk) => {
+  if (id === 'pi') return runPiSdkConsultant(prompt, cwd, timeoutMs, onChunk)
+  return spawnCliConsultant(id, prompt, cwd, timeoutMs, onChunk)
+}
+
+/**
+ * One Pi consultant turn on an in-memory SDK runtime: read-only tools only
+ * (read/grep/find/ls), no session persistence, no bash/edit/write. The plan
+ * text the consultant returns is untrusted input handled by the caller; only
+ * a user-approved consensus plan ever reaches a writable session.
+ */
+export async function runPiSdkConsultant(
+  prompt: string,
+  cwd: string,
+  timeoutMs: number,
+  onChunk?: ConsultantChunkHandler,
+): Promise<SpawnOutcome> {
+  return new Promise<SpawnOutcome>((resolve) => {
+    const manager = new PiSdkManager()
+    let settled = false
+    let planText = ''
+    const finish = (outcome: SpawnOutcome): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      manager.removeAllListeners()
+      // Ordered shutdown (abort -> dispose), escalating to a tree kill.
+      void manager.abort().catch(() => undefined)
+      void manager.stopAndWait().catch(() => undefined)
+      resolve(outcome)
+    }
+    // SDK abort first so a mid-turn model request stops, then stopAndWait's
+    // escalation reaps the utility process.
+    const timer = setTimeout(() => {
+      void manager.abort().catch(() => undefined)
+      finish({ ok: false, output: planText, timedOut: true })
+    }, timeoutMs)
+
+    manager.on('event', (event: PiRpcEvent) => {
+      if (event.type === 'message_update') {
+        const ame = (event as PiMessageUpdateEvent).assistantMessageEvent
+        if (ame.type === 'text_delta' && typeof ame.delta === 'string') {
+          planText += ame.delta
+          onChunk?.(ame.delta)
+        }
+        return
+      }
+      if (event.type === 'agent_end') {
+        finish({ ok: true, output: planText.trim() })
+      }
+    })
+
+    void (async () => {
+      const status = await manager.start({
+        cwd,
+        noSession: true,
+        tools: ['read', 'grep', 'find', 'ls'],
+      })
+      if (settled) return
+      if (status.status !== 'running') {
+        finish({ ok: false, output: planText, error: status.error ?? 'Pi helper failed to start' })
+        return
+      }
+      const response = await manager.prompt(prompt).catch((err: unknown) => {
+        finish({ ok: false, output: planText, error: err instanceof Error ? err.message : String(err) })
+        return null
+      })
+      if (!response || settled) return
+      if (!response.success) {
+        finish({ ok: false, output: planText, error: response.error ?? 'prompt rejected' })
+      }
+      // agent_end resolves from here; the timeout aborts a stalled turn.
+    })().catch((err: unknown) => {
+      finish({ ok: false, output: planText, error: err instanceof Error ? err.message : String(err) })
+    })
+  })
+}
+
+/** CLI consultant spawn for Claude/Codex; stream output, enforce timeout. */
+export const spawnCliConsultant: SpawnConsultant = (id, prompt, cwd, timeoutMs, onChunk) =>
   new Promise<SpawnOutcome>((resolve) => {
-    const piCli = id === 'pi' ? getPiCli() : null
     const { file, args } = buildConsultantSpawn(
-      id,
+      // 'pi' routes to runPiSdkConsultant before this point.
+      id as Exclude<CouncilAgentId, 'pi'>,
       resolveExecutable(id),
       IS_WINDOWS,
-      piCli?.kind === 'omp' ? 'omp' : 'pi',
     )
     const child = spawn(file, args, {
       cwd,
@@ -255,10 +336,6 @@ export const defaultSpawnConsultant: SpawnConsultant = (id, prompt, cwd, timeout
 
 // Resolve the executable path from agent detection; falls back to the bare id.
 function resolveExecutable(id: CouncilAgentId): string {
-  if (id === 'pi') {
-    const configured = getPiCli()
-    if (configured.found) return configured.script
-  }
   const found = detectAgents().find((a) => a.id === id)
   return found?.path ?? id
 }

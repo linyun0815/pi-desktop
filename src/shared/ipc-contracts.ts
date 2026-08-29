@@ -9,12 +9,11 @@ import type { PermissionRule } from '../../resources/permission-rules'
 // ─── IPC Channel Names ──────────────────────────────────────────────────────
 
 export const IPC_CHANNELS = {
-  // Pi process lifecycle
+  // Pi runtime lifecycle (embedded SDK helpers)
   PI_START: 'pi:start',
   PI_STOP: 'pi:stop',
   PI_RESTART: 'pi:restart',
   PI_STATUS: 'pi:status',
-  PI_DETECT_INSTALLATIONS: 'pi:detect-installations',
 
   // Pi commands
   PI_PROMPT: 'pi:prompt',
@@ -23,6 +22,13 @@ export const IPC_CHANNELS = {
   PI_ABORT: 'pi:abort',
   PI_BASH: 'pi:bash',
   PI_ABORT_BASH: 'pi:abort-bash',
+
+  // Provider credentials (embedded SDK auth)
+  AUTH_LIST_PROVIDERS: 'auth:list-providers',
+  AUTH_LOGIN: 'auth:login',
+  AUTH_LOGOUT: 'auth:logout',
+  AUTH_PROMPT_RESPONSE: 'auth:prompt-response',
+  AUTH_CANCEL_LOGIN: 'auth:cancel-login',
 
   // Session management
   SESSION_NEW: 'session:new',
@@ -110,6 +116,8 @@ export const IPC_CHANNELS = {
   WORKSPACE_CREATE_TAB: 'workspace:create-tab',
   WORKSPACE_ACTIVITY_GET: 'workspace:activity',
   WORKSPACE_TAKE_PENDING_ACTIVATION: 'workspace:take-pending-activation',
+  WORKSPACE_TRUST_STATUS: 'workspace:trust-status',
+  WORKSPACE_SET_TRUST: 'workspace:set-trust',
 
   // Packages
   PACKAGE_LIST_INSTALLED: 'package:list-installed',
@@ -191,9 +199,11 @@ export const IPC_CHANNELS = {
   EVENT_TERMINAL_DATA: 'event:terminal-data',
   EVENT_TERMINAL_EXIT: 'event:terminal-exit',
   EVENT_COUNCIL_PROGRESS: 'event:council-progress',
+  EVENT_AUTH_PROMPT: 'event:auth-prompt',
+  EVENT_AUTH_NOTIFY: 'event:auth-notify',
 } as const
 
-// ─── Pi Process Types ───────────────────────────────────────────────────────
+// ─── Pi Runtime Types ───────────────────────────────────────────────────────
 
 export type PiProcessStatus = 'stopped' | 'starting' | 'running' | 'error'
 
@@ -201,12 +211,6 @@ export interface PiStatus {
   status: PiProcessStatus
   pid: number | null
   error: string | null
-  /**
-   * Engine identity of the live child, so the UI can name what is actually
-   * running. Optional because a snapshot may predate the field; consumers
-   * fall back to Pi, which is what an unlabelled process has always been.
-   */
-  engine?: AgentEngineKind
 }
 
 export type SessionRuntimeActivity = 'working' | 'needs-approval' | 'completed' | 'failed'
@@ -282,6 +286,12 @@ export interface GitConveyorPullRequestResult {
   output: string
 }
 
+/**
+ * Options for one embedded runtime start. The renderer cannot pass arbitrary
+ * CLI arguments or a `--session-dir` — session paths are authorized in main
+ * and the embedded runtime always uses Pi's own session store. Permission
+ * fields are derived in main from the app settings, never from the renderer.
+ */
 export interface PiStartOptions {
   cwd?: string
   model?: string
@@ -289,20 +299,24 @@ export interface PiStartOptions {
   sessionPath?: string
   noSession?: boolean
   // When true (and neither sessionPath, forkSessionPath nor noSession is set),
-  // Pi is launched with --continue so it resumes the most recent session for
-  // the cwd instead of creating a fresh one.
+  // the runtime resumes the most recent session for the cwd instead of
+  // creating a fresh one.
   continueSession?: boolean
   // Start a new session by forking this existing Pi session file. The new
   // session is created in the supplied cwd.
   forkSessionPath?: string
-  /**
-   * Engine this one start must spawn, overriding the configured default. Each
-   * engine keeps its sessions in its own store, so a session can only be
-   * resumed by the engine that wrote it. Absent means "use the configured
-   * engine", which is what a brand-new session does.
-   */
-  engine?: AgentEngineKind
-  args?: string[]
+  /** Plan/read-only tool allowlist; null/undefined = the default full set. */
+  tools?: string[] | null
+  /** Permission mode name handed to the desktop permissions extension. */
+  permissionMode?: PermissionMode
+  /** GUI rules file the permissions extension re-reads per tool call. */
+  permissionRulesPath?: string | null
+  /** Display name used inside permission prompts ("Pi"). */
+  agentLabel?: string
+  /** Extra extension paths (e.g. the desktop permissions extension). */
+  extensionPaths?: string[]
+  /** Derived by main: workspace trust for the start's cwd. */
+  projectTrusted?: boolean
   env?: Record<string, string>
 }
 
@@ -619,7 +633,6 @@ export interface PiStatusChangeEvent {
   status: PiProcessStatus
   pid: number | null
   error: string | null
-  engine?: AgentEngineKind
 }
 
 // Emitted by Pi when the session title changes — e.g. an auto-title extension,
@@ -630,25 +643,6 @@ export interface PiSessionInfoChangedEvent {
   name?: string | null
 }
 
-/** OMP's RPC spelling for a live session title update. */
-export interface PiSessionInfoUpdateEvent {
-  type: 'session_info_update'
-  title?: string | null
-  sessionId?: string
-}
-
-/** OMP emits this when its slash-command catalog changes. */
-export interface PiAvailableCommandsUpdateEvent {
-  type: 'available_commands_update'
-  commands: unknown[]
-}
-
-/** Output from a local-only OMP slash command. */
-export interface PiCommandOutputEvent {
-  type: 'command_output'
-  text: string
-}
-
 /** Completion signal for an accepted prompt that did not invoke the agent. */
 export interface PiPromptResultEvent {
   type: 'prompt_result'
@@ -656,7 +650,7 @@ export interface PiPromptResultEvent {
   agentInvoked: boolean
 }
 
-/** OMP config changes that should cause the renderer to re-read get_state. */
+/** Thinking-level change surfaced so the renderer can re-read session state. */
 export interface PiConfigUpdateEvent {
   type: 'config_update'
   model?: unknown
@@ -684,9 +678,6 @@ export type PiRpcEvent =
   | PiExtensionUiRequest
   | PiStatusChangeEvent
   | PiSessionInfoChangedEvent
-  | PiSessionInfoUpdateEvent
-  | PiAvailableCommandsUpdateEvent
-  | PiCommandOutputEvent
   | PiPromptResultEvent
   | PiConfigUpdateEvent
 
@@ -766,12 +757,6 @@ export interface SessionListItem {
   sessionId: string
   /** Pi's header UUID, used to correlate workflow runs with this session. */
   piSessionId?: string
-  /**
-   * Engine that owns this session, taken from the store the file was indexed
-   * from. Optional because a row the index could not classify must stay
-   * listable; consumers show no engine tag rather than guessing one.
-   */
-  engine?: AgentEngineKind
   lastModified: number
   messageCount: number
   projectPath: string
@@ -1002,6 +987,41 @@ export interface AgentToolResultMessage {
 
 export type AgentMessage = AgentUserMessage | AgentAssistantMessage | AgentToolResultMessage
 
+// ─── Auth (embedded SDK provider credentials) ───────────────────────────────
+
+/**
+ * Non-sensitive credential status for one provider. Secrets never cross IPC —
+ * only whether a credential exists and where it comes from.
+ */
+export interface ProviderAuthInfo {
+  providerId: string
+  /** True when any usable credential (stored, env, or command) is configured. */
+  configured: boolean
+  /** Human-readable source label ("ANTHROPIC_API_KEY", "stored key", ...). */
+  source?: string
+  /** The embedded desktop only offers the SDK's api_key login flow. */
+  apiKeySupported: boolean
+}
+
+export interface AuthProvidersResult {
+  providers: ProviderAuthInfo[]
+}
+
+export type AuthLoginResult = { ok: true } | { ok: false; error: string; canceled?: boolean }
+
+export type AuthProvidersUpdate = AuthProvidersResult
+
+// ─── Workspace Trust ────────────────────────────────────────────────────────
+
+/** Trust state for one workspace path, as the renderer sees it. */
+export interface WorkspaceTrustStatus {
+  workspacePath: string | null
+  /** Explicitly trusted (legacy records count as pending, not trusted). */
+  trusted: boolean
+  /** Carried over from the legacy trust list; needs re-confirmation. */
+  pendingReconfirmation: boolean
+}
+
 // ─── Settings Types ─────────────────────────────────────────────────────────
 
 export type PermissionMode = 'plan-readonly' | 'ask-edits' | 'ask-commands' | 'trusted'
@@ -1037,35 +1057,7 @@ export interface PermissionRulesWorkspaceStatus {
   hasAllowRules: boolean
 }
 
-/** A concrete engine. `auto` is a preference, never something that is running. */
-export type AgentEngineKind = 'pi' | 'omp'
-
-export type AgentEngine = 'auto' | AgentEngineKind
-
-export interface AgentInstallation {
-  kind: AgentEngineKind
-  path: string
-  source: string
-}
-
-export interface AgentInstallationsResult {
-  installations: AgentInstallation[]
-}
-
-/**
- * How a detection request treats the main process's installation cache. Main
- * caches results, so a user-initiated Rescan has to ask for a fresh disk walk
- * or it silently returns the same list it already showed.
- */
-export interface AgentDetectionOptions {
-  force?: boolean
-}
-
 export interface AppSettings {
-  piExecutablePath: string
-  /** Explicit engine identity; auto preserves legacy Pi/OMP detection. */
-  piEngine: AgentEngine
-  defaultArgs: string[]
   theme: string // 'system' or a theme id (built-in or user theme)
   defaultModel: string | null
   defaultProvider: string | null
@@ -1342,21 +1334,29 @@ export interface DiagnosticsReport {
     node: string
     platform: string
   }
-  piBinary: {
-    found: boolean
-    script: string
-    source: string
-    useNode: boolean
-    nodeBinary: string
-    nodeFound: boolean
-    needsShell: boolean
-    rejectedOverride: string | null
-    failureReason: string | null
-    /** Entries on the merged (login-shell-aware) PATH used to find Pi. */
-    pathEntryCount: number
+  /** The embedded Pi SDK runtime this build ships and runs. */
+  piRuntime: {
+    /** Exact Pi SDK version the desktop is pinned to. */
+    sdkVersion: string
+    /** Parent<->helper protocol version in use. */
+    protocolVersion: number
+    /** Resolved worker entry path. */
+    workerPath: string
+    /** Node bundled inside Electron, which executes the SDK. */
+    nodeVersion: string
+    nodeSatisfied: boolean
+    /** Minimum Node the SDK requires. */
+    nodeRequired: string
   }
-  /** `pi --version` output (first line), or null when it could not run. */
-  piVersion: string | null
+  /** Live helper snapshots keyed by runtime id. */
+  helpers: Array<{
+    runtimeId: string
+    workspaceId: string
+    status: PiProcessStatus
+    pid: number | null
+    sessionPath: string | null
+    activity: SessionRuntimeActivity | null
+  }>
   workspaces: DiagnosticsWorkspaceInfo[]
   /** Null when models.json is missing or unreadable — see providersError. */
   providers: DiagnosticsProviderInfo[] | null

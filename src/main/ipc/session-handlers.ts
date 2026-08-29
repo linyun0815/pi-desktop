@@ -4,7 +4,6 @@ import {
   WorkspaceManager,
 } from "../workspace-manager";
 import {
-  engineForSessionPath,
   getSessionRoots,
   isWithinSessionRoots,
 } from "../pi-paths";
@@ -157,10 +156,9 @@ export function registerSessionHandlers(ctx: IpcContext): void {
       // before Pi finishes starting.
       void startRuntime(runtime)
         .then(() =>
-          workspaceManager.sendCommandToSessionRuntime(runtime.runtimeId, {
-            type: "prompt",
-            message: input.prompt,
-          }),
+          workspaceManager.applyToSessionRuntime(runtime.runtimeId, (manager) =>
+            manager.prompt(input.prompt as string),
+          ),
         )
         .catch(() =>
           workspaceManager.setSessionRuntimeActivity(
@@ -239,10 +237,8 @@ export function registerSessionHandlers(ctx: IpcContext): void {
   ipcMain.handle(
     IPC_CHANNELS.SESSION_FORK,
     async (_event, entryId?: unknown) => {
-      const cmd: Record<string, unknown> = { type: "fork" };
-      if (isString(entryId)) cmd.entryId = entryId;
       const pi = getActivePi();
-      const response = await pi.sendCommand(cmd);
+      const response = await pi.sessionFork(isString(entryId) ? entryId : undefined);
       const runtimeId = workspaceManager.runtimeIdFor(pi);
       if (runtimeId)
         await workspaceManager
@@ -254,7 +250,7 @@ export function registerSessionHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(IPC_CHANNELS.SESSION_CLONE, async () => {
     const pi = getActivePi();
-    const response = await pi.sendCommand({ type: "clone" });
+    const response = await pi.sessionClone();
     const runtimeId = workspaceManager.runtimeIdFor(pi);
     if (runtimeId)
       await workspaceManager.refreshSessionRuntime(runtimeId).catch(() => null);
@@ -279,13 +275,13 @@ export function registerSessionHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_STATE, async () => {
     const pi = workspaceManager.getActivePiManager();
     if (!pi || pi.getStatus().status !== "running") return null;
-    return pi.sendCommand({ type: "get_state" });
+    return pi.getState();
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_MESSAGES, async () => {
     const pi = workspaceManager.getActivePiManager();
     if (!pi || pi.getStatus().status !== "running") return null;
-    const response = await pi.sendCommand({ type: "get_messages" });
+    const response = await pi.getMessages();
     // Bound IPC payload size so multi‑MB histories don't freeze the renderer.
     return trimGetMessagesResponse(response);
   });
@@ -293,28 +289,26 @@ export function registerSessionHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_STATS, async () => {
     const pi = workspaceManager.getActivePiManager();
     if (!pi || pi.getStatus().status !== "running") return null;
-    return pi.sendCommand({ type: "get_session_stats" });
+    return pi.getStats();
   });
 
   ipcMain.handle(
     IPC_CHANNELS.SESSION_SET_NAME,
     async (_event, name: unknown) => {
       if (!isString(name)) throw new Error("name must be a string");
-      return getActivePi().sendCommand({ type: "set_session_name", name });
+      return getActivePi().setSessionName(name);
     },
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SESSION_EXPORT_HTML,
     async (_event, outputPath?: unknown) => {
-      const cmd: Record<string, unknown> = { type: "export_html" };
-      if (isString(outputPath)) cmd.outputPath = outputPath;
-      return getActivePi().sendCommand(cmd);
+      return getActivePi().exportHtml(isString(outputPath) ? outputPath : undefined);
     },
   );
 
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_FORK_MESSAGES, async () => {
-    return getActivePi().sendCommand({ type: "get_fork_messages" });
+    return getActivePi().getForkMessages();
   });
 
   ipcMain.handle(
@@ -390,11 +384,11 @@ export function registerSessionHandlers(ctx: IpcContext): void {
   ipcMain.handle(
     IPC_CHANNELS.SESSION_COMPACT,
     async (_event, customInstructions?: unknown) => {
-      const cmd: Record<string, unknown> = { type: "compact" };
-      if (isString(customInstructions) && customInstructions.length > 0) {
-        cmd.customInstructions = customInstructions;
-      }
-      return getActivePi().sendCommand(cmd);
+      return getActivePi().compact(
+        isString(customInstructions) && customInstructions.length > 0
+          ? customInstructions
+          : undefined,
+      );
     },
   );
 }
@@ -525,7 +519,6 @@ async function collectSessionFiles(
   workspaceBySanitized: Map<string, { path: string; name: string }>,
   workspaceMatched: Set<SessionEntry>,
 ): Promise<void> {
-  const engine = engineForSessionPath(sessionsRoot) ?? undefined;
   try {
     const projectDirs = await readdir(sessionsRoot, { withFileTypes: true });
     await Promise.all(
@@ -569,7 +562,6 @@ async function collectSessionFiles(
                 name: null,
                 preview: null,
                 sessionId: item.name.replace(JSONL_EXTENSION, ""),
-                engine,
                 lastModified: fileStat.mtimeMs,
                 messageCount: 0,
                 projectPath,

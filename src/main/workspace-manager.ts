@@ -1,7 +1,7 @@
 import { dirname, basename, resolve } from 'path'
 import { readFile, writeFile, mkdir, rename, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
-import { PiRpcManager } from './pi-rpc-manager'
+import { PiSdkManager } from './pi-sdk-manager'
 import { FileService } from './file-service'
 import type {
   FileChangeEvent,
@@ -13,10 +13,11 @@ import type {
   SessionRuntimeCloseResult,
 } from '../shared/ipc-contracts'
 import { getGuiDataPath } from './app-data-paths'
-import { engineForBoundSession, isWithinSessionRoots } from './pi-paths'
+import { isWithinSessionRoots } from './pi-paths'
 import { pathsEqual, pathGroupKey } from './session-paths'
 import { isPathWithin } from './path-authorization'
 import { appLog } from './app-log'
+import { workspaceTrustStore } from './workspace-trust'
 import { inspectSessionContent } from './session-metadata'
 import {
   createGitWorktree,
@@ -85,7 +86,7 @@ const WORKSPACE_COLORS = [
   '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
 ]
 
-export type PiManagerListener = (manager: PiRpcManager) => void
+export type PiManagerListener = (manager: PiSdkManager) => void
 export type ActiveWorkspaceListener = (workspaceId: string | null) => void
 export type FileChangeListener = (event: FileChangeEvent) => void
 export type WorkspaceRemovedListener = (workspaceId: string) => void
@@ -93,7 +94,7 @@ export type SessionRuntimeListener = (runtime: SessionRuntimeInfo) => void
 
 interface SessionRuntimeEntry {
   info: SessionRuntimeInfo
-  manager: PiRpcManager
+  manager: PiSdkManager
   /**
    * Wall clock of the last time this runtime was used (created, activated,
    * started, commanded, or changed activity). Drives least-recently-active
@@ -142,7 +143,7 @@ export function isDisposableSessionFile(
 export class WorkspaceManager {
   private workspaces: Workspace[] = []
   private activeWorkspaceId: string | null = null
-  private piManagers = new Map<string, PiRpcManager>()
+  private piManagers = new Map<string, PiSdkManager>()
   private fileServices = new Map<string, FileService>()
   // A workspace is a project container. Each live session gets its own Pi
   // process, even when several sessions share the same workspace cwd.
@@ -160,7 +161,7 @@ export class WorkspaceManager {
   // BEFORE any listeners were registered would be marked "wired" and never
   // get the listeners that arrived later — silently dropping every Pi event
   // for managers loaded from disk during `initialize()`.
-  private wiredPairs = new WeakMap<PiRpcManager, Set<PiManagerListener>>()
+  private wiredPairs = new WeakMap<PiSdkManager, Set<PiManagerListener>>()
   private activeWorkspaceListeners: ActiveWorkspaceListener[] = []
   private fileChangeListeners: FileChangeListener[] = []
   private workspaceRemovedListeners: WorkspaceRemovedListener[] = []
@@ -238,13 +239,13 @@ export class WorkspaceManager {
    * get attached twice if `wirePiManager` is called more than once for
    * the same manager (e.g. createWorkspace + later startPiForWorkspace).
    */
-  private wirePiManager(manager: PiRpcManager): void {
+  private wirePiManager(manager: PiSdkManager): void {
     for (const listener of this.piManagerListeners) {
       this.attachListenerOnce(manager, listener)
     }
   }
 
-  private attachListenerOnce(manager: PiRpcManager, listener: PiManagerListener): void {
+  private attachListenerOnce(manager: PiSdkManager, listener: PiManagerListener): void {
     let attached = this.wiredPairs.get(manager)
     if (!attached) {
       attached = new Set()
@@ -360,8 +361,13 @@ export class WorkspaceManager {
         this.emitRuntimeActivity(entry, 'needs-approval')
       }
     })
+    manager.on('session-bound', () => {
+      // The helper rebound its session (/new, /fork, /switch, resume): keep the
+      // runtime mapping and the renderer in step with the new JSONL.
+      this.applySessionRuntimeState(entry, null)
+    })
     manager.on('exit', () => {
-      // PiRpcManager only emits exit for an unexpected process death; deliberate
+      // PiSdkManager only emits exit for an unexpected process death; deliberate
       // stop() detaches listeners first. Preserve a visible failure marker even
       // when the process died while idle.
       this.emitRuntimeActivity(entry, 'failed')
@@ -376,7 +382,7 @@ export class WorkspaceManager {
     // process before the tab exists.
     this.enforceLiveRuntimeBudget(null)
     const runtimeId = `rt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const manager = new PiRpcManager()
+    const manager = new PiSdkManager()
     const entry: SessionRuntimeEntry = {
       manager,
       lastActiveAt: Date.now(),
@@ -471,7 +477,7 @@ export class WorkspaceManager {
     return runtimeId ? this.getSessionRuntime(runtimeId) : null
   }
 
-  runtimeIdFor(manager: PiRpcManager): string | null {
+  runtimeIdFor(manager: PiSdkManager): string | null {
     for (const [runtimeId, entry] of this.sessionRuntimes) {
       if (entry.manager === manager) return runtimeId
     }
@@ -482,7 +488,7 @@ export class WorkspaceManager {
     if (entry) this.emitRuntimeActivity(entry, activity)
   }
 
-  sessionPathFor(manager: PiRpcManager): string | null {
+  sessionPathFor(manager: PiSdkManager): string | null {
     for (const entry of this.sessionRuntimes.values()) {
       if (entry.manager === manager) return entry.info.sessionPath
     }
@@ -529,24 +535,22 @@ export class WorkspaceManager {
     const bindsExistingFile =
       options.sessionPath !== undefined ||
       options.forkSessionPath !== undefined ||
-      // --continue opens "the most recent session for this cwd", which is some
-      // earlier conversation. It only reaches the engine while this runtime has
-      // no file of its own; once it has one, the merged --session outranks it
-      // (see buildPiArgs) and the runtime re-opens what it created.
+      // Resume-recent opens "the most recent session for this cwd", which is
+      // some earlier conversation. It only reaches the runtime while this tab
+      // has no file of its own; once it has one, the merged session path
+      // outranks it and the runtime re-opens what it created.
       (options.continueSession === true && entry.info.sessionPath === null)
     if (bindsExistingFile) entry.appCreated = false
     const startOptions: PiStartOptions = {
       cwd: workspace.path,
+      // The embedded runtime derives project-resource loading from main's
+      // unified trust switch (see workspace-trust.ts) instead of prompting.
+      projectTrusted: workspaceTrustStore.isTrusted(workspace.path),
       ...(entry.info.sessionPath && !options.sessionPath && !options.forkSessionPath
         ? { sessionPath: entry.info.sessionPath }
         : {}),
       ...options,
     }
-    // Start the engine that owns the session file rather than the configured
-    // default: the stores are separate, so only the engine that wrote a session
-    // can resume it. An engine the caller named explicitly still wins.
-    const ownerEngine = engineForBoundSession(startOptions)
-    if (!startOptions.engine && ownerEngine) startOptions.engine = ownerEngine
     // Re-activating an evicted tab spawns a process again, so the budget has to
     // hold here too; an already-live runtime spawns nothing and needs no room.
     if (!this.isRuntimeLive(entry)) this.enforceLiveRuntimeBudget(runtimeId)
@@ -557,18 +561,25 @@ export class WorkspaceManager {
     if (this.sessionRuntimes.get(runtimeId) !== entry) {
       return { ...entry.info, ...entry.manager.getStatus(), active: false, closed: true }
     }
-    const response = await entry.manager.sendCommand({ type: 'get_state' }).catch(() => null)
+    const response = await entry.manager.getState().catch(() => null)
     if (this.sessionRuntimes.get(runtimeId) !== entry) {
       return { ...entry.info, ...entry.manager.getStatus(), active: false, closed: true }
     }
     return this.applySessionRuntimeState(entry, response)
   }
 
+  /**
+   * Re-apply a runtime's session identity. `response` is a get_state envelope
+   * when one was just fetched; null reads the manager's own session fields
+   * (maintained from sessionBound messages).
+   */
   private applySessionRuntimeState(entry: SessionRuntimeEntry, response: unknown): SessionRuntimeInfo {
     const data = response && typeof response === 'object' && 'data' in response
-      ? response.data as { sessionFile?: unknown; sessionId?: unknown }
+      ? response.data as { sessionFile?: unknown; sessionId?: unknown; sessionName?: unknown }
       : undefined
-    const sessionPath = typeof data?.sessionFile === 'string' ? data.sessionFile : entry.info.sessionPath
+    const sessionPath = typeof data?.sessionFile === 'string'
+      ? data.sessionFile
+      : entry.manager.sessionPath ?? entry.info.sessionPath
     if (sessionPath && sessionPath !== entry.info.sessionPath) {
       const owner = this.runtimeOwningSessionPath(sessionPath)
       if (owner && owner.info.runtimeId !== entry.info.runtimeId) {
@@ -592,7 +603,9 @@ export class WorkspaceManager {
     entry.info = {
       ...entry.info,
       sessionPath: sessionPath ?? null,
-      sessionId: typeof data?.sessionId === 'string' ? data.sessionId : entry.info.sessionId,
+      sessionId: typeof data?.sessionId === 'string'
+        ? data.sessionId
+        : entry.manager.sessionId ?? entry.info.sessionId,
       ...entry.manager.getStatus(),
     }
     this.emitSessionRuntime(entry)
@@ -608,7 +621,7 @@ export class WorkspaceManager {
   async refreshSessionRuntime(runtimeId: string): Promise<SessionRuntimeInfo | null> {
     const entry = this.sessionRuntimes.get(runtimeId)
     if (!entry) return null
-    const response = await entry.manager.sendCommand({ type: 'get_state' })
+    const response = await entry.manager.getState()
     return this.applySessionRuntimeState(entry, response)
   }
 
@@ -670,11 +683,29 @@ export class WorkspaceManager {
     }
   }
 
-  sendCommandToSessionRuntime(runtimeId: string, command: Record<string, unknown>): Promise<unknown> {
+  /**
+   * Run one typed manager operation against a specific session runtime.
+   * Replaces the old raw-command relay: callers get the PiSdkManager and
+   * invoke typed methods, so no handler can send an arbitrary command shape.
+   */
+  async applyToSessionRuntime<T>(
+    runtimeId: string,
+    operation: (manager: PiSdkManager) => Promise<T>,
+  ): Promise<T> {
     const entry = this.sessionRuntimes.get(runtimeId)
-    if (!entry) return Promise.reject(new Error(`Session runtime not found: ${runtimeId}`))
+    if (!entry) throw new Error(`Session runtime not found: ${runtimeId}`)
     this.touchRuntime(entry)
-    return entry.manager.sendCommand(command)
+    return operation(entry.manager)
+  }
+
+  /** The live manager behind a runtime id, without touching its activity. */
+  getSessionRuntimeManager(runtimeId: string): PiSdkManager | null {
+    return this.sessionRuntimes.get(runtimeId)?.manager ?? null
+  }
+
+  /** Every live runtime manager, for process-wide operations. */
+  getAllSessionRuntimeManagers(): PiSdkManager[] {
+    return [...this.sessionRuntimes.values()].map((entry) => entry.manager)
   }
 
   async initialize(): Promise<void> {
@@ -706,18 +737,18 @@ export class WorkspaceManager {
     return this.activeWorkspaceId
   }
 
-  getPiManager(workspaceId: string): PiRpcManager | null {
+  getPiManager(workspaceId: string): PiSdkManager | null {
     const runtimeId = this.activeRuntimeByWorkspace.get(workspaceId)
     if (runtimeId) return this.sessionRuntimes.get(runtimeId)?.manager ?? null
     return this.piManagers.get(workspaceId) ?? null
   }
 
-  getActivePiManager(): PiRpcManager | null {
+  getActivePiManager(): PiSdkManager | null {
     if (!this.activeWorkspaceId) return null
     return this.getPiManager(this.activeWorkspaceId)
   }
 
-  getPiManagerForSession(workspaceId: string, sessionId: string): PiRpcManager | null {
+  getPiManagerForSession(workspaceId: string, sessionId: string): PiSdkManager | null {
     for (const entry of this.sessionRuntimes.values()) {
       if (entry.info.workspaceId === workspaceId && entry.info.sessionId === sessionId) return entry.manager
     }
@@ -725,7 +756,7 @@ export class WorkspaceManager {
   }
 
   /** Reverse lookup: the workspace id owning a given Pi manager, if any. */
-  workspaceIdFor(manager: PiRpcManager): string | null {
+  workspaceIdFor(manager: PiSdkManager): string | null {
     for (const [workspaceId, candidate] of this.piManagers) {
       if (candidate === manager) return workspaceId
     }
@@ -766,7 +797,7 @@ export class WorkspaceManager {
     this.workspaces.push(workspace)
 
     // Create Pi manager and file service for this workspace
-    const piManager = new PiRpcManager()
+    const piManager = new PiSdkManager()
     this.piManagers.set(workspace.id, piManager)
     this.wirePiManager(piManager)
     const fileService = new FileService(path)
@@ -942,7 +973,7 @@ export class WorkspaceManager {
     }
     this.nextColorIndex++
     this.workspaces.push(workspace)
-    const piManager = new PiRpcManager()
+    const piManager = new PiSdkManager()
     this.piManagers.set(workspace.id, piManager)
     this.wirePiManager(piManager)
     this.fileServices.set(workspace.id, new FileService(entry.path))
@@ -1069,7 +1100,7 @@ export class WorkspaceManager {
     }
     this.nextColorIndex++
     this.workspaces.push(workspace)
-    const piManager = new PiRpcManager()
+    const piManager = new PiSdkManager()
     this.piManagers.set(workspace.id, piManager)
     this.wirePiManager(piManager)
     this.fileServices.set(workspace.id, new FileService(targetPath))
@@ -1136,7 +1167,7 @@ export class WorkspaceManager {
     // Create file services and Pi managers for loaded workspaces
     for (const ws of this.workspaces) {
       if (!this.piManagers.has(ws.id)) {
-        const manager = new PiRpcManager()
+        const manager = new PiSdkManager()
         this.piManagers.set(ws.id, manager)
         this.wirePiManager(manager)
       }

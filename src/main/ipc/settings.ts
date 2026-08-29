@@ -1,5 +1,4 @@
 import { secureIpcMain as ipcMain } from "./validation";
-import { setPiExecutableOverride } from "../pi-rpc-manager";
 import { WorkspaceManager } from "../workspace-manager";
 import { getGuiDataPath } from "../app-data-paths";
 import type { AppSettings } from "../../shared/ipc-contracts";
@@ -18,6 +17,18 @@ import type { IpcContext } from "./context";
 
 const SETTINGS_FILE_NAME = "settings.json";
 
+/**
+ * Fields removed by the embedded-SDK migration. They are ignored on read and
+ * stripped on first save so the file converges on the current schema.
+ */
+const LEGACY_SETTING_KEYS = ["piExecutablePath", "piEngine", "defaultArgs"] as const;
+
+function stripLegacyKeys(record: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = { ...record };
+  for (const key of LEGACY_SETTING_KEYS) delete cleaned[key];
+  return cleaned;
+}
+
 /** Also consumed by the diagnostics report. */
 export function getSettingsPath(): string {
   return getGuiDataPath(SETTINGS_FILE_NAME);
@@ -30,14 +41,10 @@ export async function loadAppSettings(
     const settingsPath = getSettingsPath();
     if (existsSync(settingsPath)) {
       const data = await readFile(settingsPath, "utf-8");
-      const merged = { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
-      if (
-        merged.piEngine !== "auto" &&
-        merged.piEngine !== "pi" &&
-        merged.piEngine !== "omp"
-      ) {
-        merged.piEngine = "auto";
-      }
+      const parsed = stripLegacyKeys(JSON.parse(data) as Record<string, unknown>);
+      // `merged as AppSettings` is safe for the known fields; unknown leftover
+      // keys are inert and dropped on the next save.
+      const merged = { ...DEFAULT_SETTINGS, ...parsed } as AppSettings;
       return merged;
     }
   } catch {
@@ -64,17 +71,17 @@ export async function saveAppSettings(
   }
 
   // Merge with existing
-  let existing: AppSettings = { ...DEFAULT_SETTINGS };
+  let existing: Record<string, unknown> = { ...DEFAULT_SETTINGS };
   try {
     if (existsSync(settingsPath)) {
       const data = await readFile(settingsPath, "utf-8");
-      existing = { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+      existing = { ...DEFAULT_SETTINGS, ...stripLegacyKeys(JSON.parse(data) as Record<string, unknown>) };
     }
   } catch {
     // Use defaults
   }
 
-  const merged = { ...existing, ...settings };
+  const merged = stripLegacyKeys({ ...existing, ...settings });
   try {
     await writeFile(settingsPath, JSON.stringify(merged, null, 2), "utf-8");
   } catch (err) {
@@ -114,13 +121,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           Boolean((settings as Partial<AppSettings>).minimizeToTrayOnClose),
         );
       }
-      // Re-resolve the Pi binary so a corrected executable path or explicit engine
-      // takes effect on the next runtime start without relying on filename sniffing.
-      const updated = await loadAppSettings(workspaceManager);
-      if ("piExecutablePath" in settings || "piEngine" in settings) {
-        setPiExecutableOverride(updated.piExecutablePath, updated.piEngine);
-      }
-      return updated;
+      return loadAppSettings(workspaceManager);
     },
   );
 

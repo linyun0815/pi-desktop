@@ -2,8 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   classifyProviderKey,
-  countPathEntries,
-  extractVersionLine,
   sanitizeProvidersError,
   summarizeProviders,
 } from './diagnostics-report'
@@ -46,13 +44,6 @@ test('summarizeProviders tolerates null and non-object provider entries', () => 
   ])
 })
 
-test('extractVersionLine takes the first non-empty line', () => {
-  assert.equal(extractVersionLine('0.31.0\n'), '0.31.0')
-  assert.equal(extractVersionLine('\n  pi 0.31.0 \nextra noise'), 'pi 0.31.0')
-  assert.equal(extractVersionLine('   '), null)
-  assert.equal(extractVersionLine(''), null)
-})
-
 test('sanitizeProvidersError withholds JSON.parse detail that can quote file content', () => {
   assert.equal(
     sanitizeProvidersError('models.json is not valid JSON: Unexpected token s, ..."apiKey": sk-live-ab"...'),
@@ -68,8 +59,3 @@ test('sanitizeProvidersError withholds JSON.parse detail that can quote file con
   )
 })
 
-test('countPathEntries splits on the platform delimiter and drops blanks', () => {
-  assert.equal(countPathEntries('/usr/bin:/usr/local/bin::/opt/bin', false), 3)
-  assert.equal(countPathEntries('C:\\Windows;C:\\Tools;', true), 2)
-  assert.equal(countPathEntries('', false), 0)
-})

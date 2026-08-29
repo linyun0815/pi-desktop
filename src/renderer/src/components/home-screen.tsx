@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSessionTitle } from "../utils/session-title";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import { clsx } from "clsx";
 import {
   FolderOpen,
@@ -283,9 +280,8 @@ export function HomeInfoSummary({
 function PiErrorBanner(): React.JSX.Element | null {
   const piStatus = useAppStore((s) => s.piStatus);
   const piError = useAppStore((s) => s.piError);
-  const engineLabel = useAppStore(
-    (s) => agentEngineLabel(s.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const setCurrentView = useAppStore((s) => s.setCurrentView);
   if (piStatus !== "error" || !piError) return null;
   return (

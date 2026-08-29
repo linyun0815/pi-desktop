@@ -138,3 +138,6 @@ TEST.md
 # Worktrees / Local Sandboxes
 .worktrees/
 .sandbox/
+
+# Embedded Pi verification scratch data
+.verify-pi-agent/

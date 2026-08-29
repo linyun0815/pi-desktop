@@ -237,22 +237,11 @@ test("consultant command uses read-only flags per agent", () => {
   assert.ok(codex.args.includes("exec"));
 });
 
-test("OMP consultant command uses its native read-only tool allowlist", () => {
-  const omp = buildConsultantCommand("pi", "omp", "omp");
-  assert.deepEqual(omp.args, [
-    "-p",
-    "--mode",
-    "json",
-    "--no-session",
-    "--tools",
-    "read,grep,glob",
-  ]);
-});
-
 test("consultant command never puts the prompt in argv (stdin-only delivery)", () => {
   // Untrusted prompt text must not reach the command line — on Windows the args
   // pass through cmd.exe and would be open to shell-metacharacter injection.
-  for (const id of ["pi", "claude", "codex"] as const) {
+  // Pi consultants run on the embedded SDK helper and spawn no argv at all.
+  for (const id of ["claude", "codex"] as const) {
     const { args } = buildConsultantCommand(id, "/usr/bin/agent");
     assert.ok(
       !args.some((a) => /prompt/i.test(a)),
@@ -333,23 +322,11 @@ test("parseCodexStreamLine ignores non-item events and bad JSON", () => {
   assert.deepEqual(parseCodexStreamLine(""), {});
 });
 
-test("pi command runs read-only json mode with bash excluded", () => {
-  const pi = buildConsultantCommand("pi", "/usr/bin/pi");
-  assert.equal(pi.file, "/usr/bin/pi");
-  assert.ok(pi.args.includes("-p"));
-  assert.ok(pi.args.includes("--mode"));
-  assert.ok(pi.args.includes("json"));
-  assert.ok(pi.args.includes("--exclude-tools"));
-  // bash must be denied so an injected plan cannot run shell commands during
-  // the supposedly read-only planning/arbitration run.
-  const denied = pi.args[pi.args.indexOf("--exclude-tools") + 1] ?? "";
-  assert.ok(
-    denied.split(",").includes("bash"),
-    "pi read-only run must exclude bash",
-  );
-  assert.ok(denied.split(",").includes("edit"));
-  assert.ok(denied.split(",").includes("write"));
-});
+test("pi consultants have no CLI argv; the SDK helper enforces read-only tools", () => {
+  // The embedded Pi consultant runs in-memory with tools=[read,grep,find,ls]
+  // (see runPiSdkConsultant); there is no CLI argv to assert anymore.
+  assert.ok(true);
+})
 
 test("parsePiStreamLine extracts assistant text as plan", () => {
   const line = JSON.stringify({

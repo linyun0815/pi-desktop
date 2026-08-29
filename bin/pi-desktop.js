@@ -39,10 +39,9 @@ if (args.includes('--help') || args.includes('-h')) {
     See https://github.com/FaqFirebase/pi-desktop for releases
     and build-from-source instructions.
 
-  The app requires Pi to be installed:
-    curl -fsSL https://pi.dev/install.sh | sh
-    # or
-    npm install -g @earendil-works/pi-coding-agent
+  Pi (the coding agent) ships embedded in the app — no separate Pi or
+  Node installation is required. npm/git are only needed if you install
+  optional Pi packages from inside the app.
 `)
   process.exit(0)
 }

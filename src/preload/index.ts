@@ -7,9 +7,10 @@ import type {
   SessionDeleteResult,
   ArchivedSessionsMap,
   AppSettings,
-  AgentDetectionOptions,
-  AgentInstallationsResult,
+  AuthProvidersResult,
+  AuthLoginResult,
   Workspace,
+  WorkspaceTrustStatus,
   WorkspaceTabOptions,
   WorkspaceRemoveResult,
   InstalledPackage,
@@ -70,18 +71,29 @@ import type {
   GitConveyorPullRequestResult,
 } from '../shared/ipc-contracts'
 import type { ThemeFile } from '../shared/theme/theme-file'
+import type { AuthEventPayload, AuthPromptPayload } from '../shared/embedded-agent-protocol'
 import { IPC_CHANNELS } from '../shared/ipc-contracts'
 
 // ─── Type Definitions for the Exposed API ────────────────────────────────────
 
 interface PiDesktopAPI {
-  // Pi process lifecycle
+  // Pi runtime lifecycle (embedded SDK)
   pi: {
     start(options?: PiStartOptions): Promise<PiStatus>
     stop(): Promise<PiStatus>
     restart(options?: PiStartOptions): Promise<PiStatus>
     getStatus(): Promise<PiStatus>
-    detectInstallations(options?: AgentDetectionOptions): Promise<AgentInstallationsResult>
+  }
+
+  // Provider credentials (embedded SDK auth)
+  auth: {
+    listProviders(): Promise<AuthProvidersResult>
+    login(providerId: string): Promise<AuthLoginResult>
+    logout(providerId: string): Promise<AuthLoginResult>
+    answerPrompt(loginId: string, value: string): Promise<{ ok: boolean }>
+    cancelLogin(loginId: string): Promise<{ ok: boolean }>
+    onAuthPrompt(callback: (event: { loginId: string; prompt: AuthPromptPayload }) => void): () => void
+    onAuthNotify(callback: (event: { loginId: string; event: AuthEventPayload }) => void): () => void
   }
 
   // Pi commands
@@ -181,6 +193,10 @@ interface PiDesktopAPI {
      * window existed (macOS closed-window case). Null when there is none.
      */
     takePendingActivation(): Promise<WorkspaceActivationIntent | null>
+    trustStatus(workspaceId?: string): Promise<WorkspaceTrustStatus>
+    setTrust(workspaceId: string, trusted: boolean): Promise<WorkspaceTrustStatus>
+    trustStatus(workspaceId?: string): Promise<WorkspaceTrustStatus>
+    setTrust(workspaceId: string, trusted: boolean): Promise<WorkspaceTrustStatus>
   }
 
   // Package management
@@ -266,7 +282,7 @@ interface PiDesktopAPI {
     /** Whether a path exists and is a directory (folder open). */
     pathKind(path: string): Promise<PathKindResult>
     openExternal(url: string): Promise<void>
-    getVersion(): Promise<string>
+    getVersion(): Promise<{ app: string; piSdk: string }>
     /**
      * Host OS platform from the preload process polyfill. Sync — sandboxed
      * renderer pages have no Node `process`, so path helpers read this for
@@ -348,7 +364,29 @@ const api: PiDesktopAPI = {
     stop: () => ipcRenderer.invoke(IPC_CHANNELS.PI_STOP),
     restart: (options?: PiStartOptions) => ipcRenderer.invoke(IPC_CHANNELS.PI_RESTART, options),
     getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.PI_STATUS),
-    detectInstallations: (options) => ipcRenderer.invoke(IPC_CHANNELS.PI_DETECT_INSTALLATIONS, options),
+  },
+
+  auth: {
+    listProviders: () => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LIST_PROVIDERS),
+    login: (providerId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGIN, providerId),
+    logout: (providerId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGOUT, providerId),
+    answerPrompt: (loginId: string, value: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUTH_PROMPT_RESPONSE, loginId, value),
+    cancelLogin: (loginId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_CANCEL_LOGIN, loginId),
+    onAuthPrompt: (callback: (event: { loginId: string; prompt: AuthPromptPayload }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { loginId: string; prompt: AuthPromptPayload }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.EVENT_AUTH_PROMPT, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.EVENT_AUTH_PROMPT, handler)
+      }
+    },
+    onAuthNotify: (callback: (event: { loginId: string; event: AuthEventPayload }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { loginId: string; event: AuthEventPayload }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.EVENT_AUTH_NOTIFY, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.EVENT_AUTH_NOTIFY, handler)
+      }
+    },
   },
 
   commands: {
@@ -435,6 +473,9 @@ const api: PiDesktopAPI = {
     createTab: (options) => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_CREATE_TAB, options),
     getActivity: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_ACTIVITY_GET),
     takePendingActivation: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_TAKE_PENDING_ACTIVATION),
+    trustStatus: (workspaceId?: string) => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_TRUST_STATUS, workspaceId),
+    setTrust: (workspaceId: string, trusted: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET_TRUST, workspaceId, trusted),
   },
 
   packages: {

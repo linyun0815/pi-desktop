@@ -25,22 +25,24 @@
   "scripts": {
     "dev": "electron-vite build && electron-vite preview -- --no-sandbox",
     "dev:hot": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint src bin scripts resources && node scripts/check-semantic-colors.mjs",
-    "package": "electron-vite build && electron-builder",
-    "package:linux": "electron-vite build && electron-builder --linux",
-    "package:linux:appimage": "electron-vite build && electron-builder --linux AppImage",
-    "package:linux:all": "electron-vite build && electron-builder --linux",
-    "package:mac": "electron-vite build && electron-builder --mac",
-    "package:mac:dmg": "electron-vite build && electron-builder --mac dmg",
-    "package:mac:zip": "electron-vite build && electron-builder --mac zip",
-    "package:win": "electron-vite build && electron-builder --win",
-    "package:win:nsis": "electron-vite build && electron-builder --win nsis",
-    "package:win:portable": "electron-vite build && electron-builder --win portable",
-    "package:all": "electron-vite build && electron-builder --linux --mac --win",
-    "postinstall": "node scripts/postinstall.js"
+    "package": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder",
+    "package:linux": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --linux",
+    "package:linux:appimage": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --linux AppImage",
+    "package:linux:all": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --linux",
+    "package:mac": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --mac",
+    "package:mac:dmg": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --mac dmg",
+    "package:mac:zip": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --mac zip",
+    "package:win": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --win",
+    "package:win:nsis": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --win nsis",
+    "package:win:portable": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --win portable",
+    "package:all": "node scripts/check-electron-node.mjs && node scripts/generate-licenses.mjs && electron-vite build && electron-builder --linux --mac --win",
+    "postinstall": "node scripts/postinstall.js",
+    "verify:embedded-pi": "node scripts/verify-embedded-pi.mjs",
+    "licenses": "node scripts/generate-licenses.mjs"
   },
   "allowScripts": {
     "electron-winstaller@5.4.0": true,
@@ -64,6 +66,7 @@
     "@codemirror/lang-yaml": "^6.1.3",
     "@codemirror/language": "^6.12.3",
     "@codemirror/legacy-modes": "^6.5.3",
+    "@earendil-works/pi-coding-agent": "0.84.4",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@lezer/highlight": "^1.2.3",
@@ -165,6 +168,15 @@
       "installerIcon": "resources/icons/icon.ico",
       "uninstallerIcon": "resources/icons/icon.ico",
       "artifactName": "Pi-Desktop-${version}-${os}-${arch}-setup.${ext}"
-    }
+    },
+    "asarUnpack": [
+      "out/main/embedded-pi-worker.js",
+      "**/node_modules/**/*.node",
+      "**/node_modules/@silvia-odwyer/photon-node/*.wasm",
+      "**/node_modules/@earendil-works/pi-coding-agent/dist/**/*.wasm"
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
   }
 }

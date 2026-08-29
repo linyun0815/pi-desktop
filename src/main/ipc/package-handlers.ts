@@ -5,25 +5,18 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import { isString, secureIpcMain as ipcMain } from "./validation";
-import { runPiCli } from "./run-pi-cli";
-import { getPiCli } from "../pi-rpc-manager";
-import { getOmpAgentDir, getPiAgentDir } from "../pi-paths";
+import { getPiAgentDir } from "../pi-paths";
 import type { IpcContext } from "./context";
 
 export function registerPackageHandlers(ctx: IpcContext): void {
-  const { workspaceManager } = ctx;
+  const { workspaceManager, adminManager } = ctx;
 
   // ─── Package Management ─────────────────────────────────────────────────
-
-  const activeEngine = (): "pi" | "omp" =>
-    workspaceManager.getActivePiManager()?.getEngineKind() ??
-    getPiCli().kind ??
-    "pi";
 
   ipcMain.handle(IPC_CHANNELS.PACKAGE_LIST_INSTALLED, async () => {
     const ws = workspaceManager.getActiveWorkspace();
     const cwd = ws?.path ?? process.cwd();
-    return listInstalledPackages(cwd, activeEngine());
+    return listInstalledPackages(cwd);
   });
 
   ipcMain.handle(
@@ -33,9 +26,7 @@ export function registerPackageHandlers(ctx: IpcContext): void {
         throw new Error("packageSpec must be a string");
       if (!isValidPackageSpec(packageSpec))
         throw new Error("Invalid package specification");
-      const ws = workspaceManager.getActiveWorkspace();
-      const cwd = ws?.path ?? process.cwd();
-      return installPackage(packageSpec, cwd);
+      return adminManager.installPackage(packageSpec);
     },
   );
 
@@ -46,9 +37,7 @@ export function registerPackageHandlers(ctx: IpcContext): void {
         throw new Error("packageSpec must be a string");
       if (!isValidPackageSpec(packageSpec))
         throw new Error("Invalid package specification");
-      const ws = workspaceManager.getActiveWorkspace();
-      const cwd = ws?.path ?? process.cwd();
-      return removePackage(packageSpec, cwd);
+      return adminManager.removePackage(packageSpec);
     },
   );
 
@@ -58,11 +47,8 @@ export function registerPackageHandlers(ctx: IpcContext): void {
       if (isString(packageSpec) && !isValidPackageSpec(packageSpec)) {
         throw new Error("Invalid package specification");
       }
-      const ws = workspaceManager.getActiveWorkspace();
-      const cwd = ws?.path ?? process.cwd();
-      return updatePackage(
+      return adminManager.updatePackage(
         isString(packageSpec) ? packageSpec : undefined,
-        cwd,
       );
     },
   );
@@ -87,15 +73,11 @@ interface InstalledPackage {
 
 async function listInstalledPackages(
   cwd: string,
-  engine: "pi" | "omp",
 ): Promise<InstalledPackage[]> {
   try {
-    const agentRoot = engine === "omp" ? getOmpAgentDir() : getPiAgentDir();
+    const agentRoot = getPiAgentDir();
     const globalSettingsPath = join(agentRoot, "settings.json");
-    const projectSettingsPath =
-      engine === "omp"
-        ? join(cwd, ".omp", "settings.json")
-        : join(cwd, ".pi", "settings.json");
+    const projectSettingsPath = join(cwd, ".pi", "settings.json");
 
     const packages: InstalledPackage[] = [];
     const globalPackages = await readPackagesFromSettings(globalSettingsPath);
@@ -168,23 +150,3 @@ function extractVersion(source: string): string | null {
   return match ? match[1] : null;
 }
 
-async function installPackage(
-  spec: string,
-  cwd: string,
-): Promise<{ success: boolean; output: string }> {
-  return runPiCli(["install", spec], cwd, 120_000);
-}
-
-async function removePackage(
-  spec: string,
-  cwd: string,
-): Promise<{ success: boolean; output: string }> {
-  return runPiCli(["remove", spec], cwd, 30_000);
-}
-
-async function updatePackage(
-  spec: string | undefined,
-  cwd: string,
-): Promise<{ success: boolean; output: string }> {
-  return runPiCli(spec ? ["update", spec] : ["update"], cwd, 120_000);
-}

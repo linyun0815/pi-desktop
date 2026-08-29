@@ -13,8 +13,8 @@ import type {
 } from '../shared/ipc-contracts'
 import { configureGuiDataDir, getGuiDataPath } from './app-data-paths'
 import { isPathWithin } from './path-authorization'
-import { getOmpSessionsRoot, getSessionsRoot } from './pi-paths'
-import { PiRpcManager } from './pi-rpc-manager'
+import { getSessionsRoot } from './pi-paths'
+import { PiSdkManager } from './pi-sdk-manager'
 import { isDisposableSessionFile, MAX_LIVE_SESSION_RUNTIMES, WorkspaceManager } from './workspace-manager'
 
 async function freshDataDir(): Promise<void> {
@@ -26,28 +26,19 @@ async function project(): Promise<string> {
 }
 
 /**
- * Run with each engine's session store redirected into its own temp tree, so a
- * fixture can be placed in the store that decides which engine owns it.
+ * Run with Pi's session store redirected into a temp tree, so a fixture can be
+ * placed inside the only store the session index reads.
  */
 async function withSessionStores(
-  fn: (roots: { pi: string; omp: string }) => Promise<void>
+  fn: (roots: { pi: string }) => Promise<void>
 ): Promise<void> {
-  const saved = {
-    pi: process.env.PI_CODING_AGENT_DIR,
-    omp: process.env.OMP_CODING_AGENT_DIR,
-  }
+  const saved = process.env.PI_CODING_AGENT_DIR
   process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), 'pi-agent-'))
-  process.env.OMP_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), 'omp-agent-'))
   try {
-    await fn({ pi: getSessionsRoot(), omp: getOmpSessionsRoot() })
+    await fn({ pi: getSessionsRoot() })
   } finally {
-    for (const [key, value] of [
-      ['PI_CODING_AGENT_DIR', saved.pi],
-      ['OMP_CODING_AGENT_DIR', saved.omp],
-    ] as const) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
+    if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = saved
   }
 }
 
@@ -61,8 +52,8 @@ async function storedSession(root: string, name: string, ...records: object[]): 
 }
 
 /** Make the manager's get_state report the session file the agent wrote. */
-function reportsSessionFile(manager: PiRpcManager, sessionPath: string, sessionId: string): void {
-  manager.sendCommand = async () => ({
+function reportsSessionFile(manager: PiSdkManager, sessionPath: string, sessionId: string): void {
+  manager.getState = async () => ({
     type: 'response',
     command: 'get_state',
     success: true,
@@ -94,7 +85,7 @@ interface FakePiProcess {
  * the real manager emits from setStatus().
  */
 function fakePiProcess(
-  manager: PiRpcManager,
+  manager: PiSdkManager,
   pid: number,
   initial: PiProcessStatus = 'running'
 ): FakePiProcess {
@@ -187,7 +178,7 @@ test('workspaceIdFor reverse-maps a manager to its owning workspace', async () =
     assert.ok(alphaManager && betaManager, 'each workspace should own a Pi manager')
     assert.equal(mgr.workspaceIdFor(alphaManager), alpha.id)
     assert.equal(mgr.workspaceIdFor(betaManager), beta.id)
-    assert.equal(mgr.workspaceIdFor(new PiRpcManager()), null, 'an unowned manager must map to nothing')
+    assert.equal(mgr.workspaceIdFor(new PiSdkManager()), null, 'an unowned manager must map to nothing')
   })
 })
 
@@ -403,7 +394,7 @@ test('closing a session runtime removes its tab and only marks empty sessions di
   })
 })
 
-test('a session starts on the engine that owns its store, not the configured default', async () => {
+test('a start binds the session file and trusts only trusted workspaces', async () => {
   await freshDataDir()
 
   await withSessionStores(async (roots) => {
@@ -411,33 +402,23 @@ test('a session starts on the engine that owns its store, not the configured def
       const workspace = await mgr.createWorkspace('Alpha', await project())
 
       // Opened from the session list, the way session-handlers starts it.
-      const ompPath = await storedSession(roots.omp, 'omp.jsonl', { type: 'session', id: 'omp' })
-      const ompRuntime = await mgr.activateSession(workspace.id, ompPath)
-      const ompManager = mgr.getActivePiManager()
-      assert.ok(ompManager, 'the activated session owns the active manager')
-      const ompProcess = fakePiProcess(ompManager, 601, 'stopped')
-      await mgr.startSessionRuntime(ompRuntime.runtimeId, { sessionPath: ompPath })
-      assert.equal(ompProcess.lastStartOptions?.engine, 'omp')
-      assert.equal(ompProcess.lastStartOptions?.sessionPath, ompPath)
+      const sessionPath = await storedSession(roots.pi, 'pi.jsonl', { type: 'session', id: 'pi' })
+      const runtime = await mgr.activateSession(workspace.id, sessionPath)
+      const manager = mgr.getActivePiManager()
+      assert.ok(manager, 'the activated session owns the active manager')
+      const process = fakePiProcess(manager, 601, 'stopped')
+      await mgr.startSessionRuntime(runtime.runtimeId, { sessionPath })
+      assert.equal(process.lastStartOptions?.sessionPath, sessionPath)
 
-      // Restarting an evicted tab passes no session path, so the engine has to
-      // survive on the runtime's own remembered file.
-      const piPath = await storedSession(roots.pi, 'pi.jsonl', { type: 'session', id: 'pi' })
-      const piRuntime = await mgr.activateSession(workspace.id, piPath)
-      const piManager = mgr.getActivePiManager()
-      assert.ok(piManager)
-      const piProcess = fakePiProcess(piManager, 602, 'stopped')
-      await mgr.startSessionRuntime(piRuntime.runtimeId)
-      assert.equal(piProcess.lastStartOptions?.engine, 'pi')
-
-      // A brand-new session belongs to no store yet, so it uses the engine the
-      // user configured.
+      // Restarting an evicted tab passes no session path, so the runtime has
+      // to survive on its own remembered file.
       const fresh = await mgr.createNewSessionRuntime(workspace.id)
       const freshManager = mgr.getActivePiManager()
       assert.ok(freshManager)
       const freshProcess = fakePiProcess(freshManager, 603, 'stopped')
       await mgr.startSessionRuntime(fresh.runtimeId)
-      assert.equal(freshProcess.lastStartOptions?.engine, undefined)
+      // projectTrusted is derived in main from the unified trust switch.
+      assert.equal(freshProcess.lastStartOptions?.projectTrusted, false)
     })
   })
 })
@@ -638,7 +619,7 @@ test('a live runtime never loses its session file to another runtime', async () 
     assert.ok(newcomerManager, 'the new session owns the active Pi manager')
     const newcomerProcess = fakePiProcess(newcomerManager, 9301)
     // Pi reports a session file that already has a live writer.
-    newcomerManager.sendCommand = async () => ({
+    newcomerManager.getState = async () => ({
       type: 'response',
       command: 'get_state',
       success: true,

@@ -12,7 +12,7 @@ Still in alpha, so expect rough edges.
 
 - [What it does](#what-it-does)
 - [Review rail](#review-rail)
-- [Pi and OMP engines](#pi-and-omp-engines)
+- [Embedded Pi runtime](#embedded-pi-runtime)
 - [Permissions](#permissions)
 - [Custom themes](#custom-themes)
 - [Multi-Agent Council Planning](#multi-agent-council-planning)
@@ -52,7 +52,7 @@ Still in alpha, so expect rough edges.
 - Terminal with ANSI colors, running your real shell
 - Package browser connected to pi.dev/packages, with instant local search; install and remove packages without leaving the app
 - Skills browser, plus a custom models & providers editor in Settings that edits `~/.pi/agent/models.json`
-- Diagnostics view: Pi/OMP install and PATH resolution, provider configuration, permissions, and recent errors
+- Diagnostics view: embedded Pi SDK version and helper status, provider configuration, permissions, and recent errors
 - Live-preview settings and themes: 7 built-ins plus System, and custom themes you can create in-app, import, export, or install from a URL
 
 ## Review rail
@@ -70,13 +70,13 @@ Changed files use readable status badges:
 | `STG` | Modified file staged in git |
 | `REN` | File was renamed |
 
-## Pi and OMP engines
+## Embedded Pi runtime
 
-Pi Desktop speaks Pi's RPC protocol directly, so it can run either the standard `pi` CLI or the compatible `omp` binary from [oh-my-pi](https://github.com/can1357/oh-my-pi). **Settings → Agent Configuration → Agent Installation** scans for installed engines, lets you select one, and also supports a custom executable or install directory.
+Pi Desktop ships the Pi coding agent as an **embedded SDK** (`@earendil-works/pi-coding-agent`, pinned exactly per release). There is no Pi CLI to install and no system Node requirement: each live session runs on its own Electron utility process executing the SDK on the Node runtime Electron bundles. The runtime reuses Pi's own data in place — `auth.json`, `models.json`, `settings.json`, and the sessions under `~/.pi/agent/sessions` (override with `PI_CODING_AGENT_DIR`).
 
-Each engine keeps its own sessions: Pi writes to `~/.pi/agent/sessions`, OMP to `~/.omp/agent/sessions`. The app reads both, so switching engines never hides your history. When sessions from both appear in one list, each row is tagged `Pi` or `OMP`, and opening one starts the engine that wrote it.
+Settings shows the embedded SDK version and the login state of your provider credentials (**Settings → Provider credentials**, API-key login). Optional Pi package installs/updates need `npm` (git sources need `git`) on your PATH; without them, basic chat and already-installed packages keep working, and missing packages are reported instead of auto-installed.
 
-OMP's protocol-v2 large-frame transport is negotiated automatically, and model-specific thinking efforts, including `max`, are shown when advertised. Its native `read`, `grep`, and `glob` tools are used for Plan / Read-only mode, and its plugin install/update/remove verbs are mapped behind the existing package actions.
+Old `~/.omp` data is left on disk untouched but is no longer listed, resumed, or migrated.
 
 ## Permissions
 
@@ -168,13 +168,8 @@ To use it, type your request with the feature enabled and click **Plan with Coun
 
 ### Requirements
 
-- The **Pi CLI**, installed globally and on your PATH:
-
-  ```bash
-  npm install -g @earendil-works/pi-coding-agent
-  ```
-
-- Optionally, the `omp` binary from [oh-my-pi](https://github.com/can1357/oh-my-pi) as an alternative engine — see [Pi and OMP engines](#pi-and-omp-engines).
+- Nothing to install for Pi itself: the Pi coding agent SDK is **embedded** in the release and runs on the Node runtime bundled with Electron — see [Embedded Pi runtime](#embedded-pi-runtime).
+- Building from source requires **Node >= 22.19.0** (the build verifies this and fails early otherwise).
 
 ### Linux
 
@@ -270,15 +265,7 @@ The postinstall script verifies the bundled `node-pty` native files and the Elec
 
 If the Electron binary is missing after install, use the [manual Electron binary download](#manual-electron-binary-download) steps below. This is the confirmed fallback on Windows when Electron's postinstall extraction leaves a partial `dist` folder.
 
-#### 4. Install Pi
-
-```powershell
-powershell -c "irm https://pi.dev/install.ps1 | iex"
-```
-
-Open a **new terminal** after this so the updated PATH takes effect.
-
-#### 5. Run
+#### 4. Run
 
 ```powershell
 npm run dev

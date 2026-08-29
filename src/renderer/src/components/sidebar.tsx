@@ -34,11 +34,7 @@ import {
 import { useMemo, useState, useRef } from "react";
 import { StatusPopover } from "./status-popover";
 import { useContextMenu, buildSessionContextMenu } from "./context-menu";
-import {
-  getSessionEngineLabel,
-  getSessionRowLabels,
-  hasMixedSessionEngines,
-} from "./sidebar-session-labels";
+import { getSessionRowLabels } from "./sidebar-session-labels";
 import { ResizeHandle } from "./resize-handle";
 import { getSessionTitle } from "../utils/session-title";
 import { formatRelativeTime } from "../utils/format-relative-time";
@@ -261,13 +257,6 @@ export function Sidebar(): React.JSX.Element {
     }));
   };
 
-  // Gated on every known session, not on one section's slice, so the same chat
-  // carries the same tag in Recent, in a folder group and under Archived.
-  const showEngineTags = useMemo(
-    () => hasMixedSessionEngines(sessionList),
-    [sessionList],
-  );
-
   const recentSessionsForWorkspace = useMemo(() => {
     if (!activeWorkspace?.path) return [];
     return activeSessions
@@ -375,7 +364,6 @@ export function Sidebar(): React.JSX.Element {
       sessionState?.sessionFile === session.path ||
       runtime?.runtimeId === activeSessionRuntimeId;
     const nested = options?.nested ?? false;
-    const engineLabel = showEngineTags ? getSessionEngineLabel(session) : null;
 
     // Inline rename for the active row.
     if (isActive && renamingWhere === "recent") {
@@ -425,7 +413,6 @@ export function Sidebar(): React.JSX.Element {
                 the home screen, which is not grouped, shows the project instead.
                 The engine leads the line only when both engines are present. */}
             <div className="truncate text-[11px] text-faint">
-              {engineLabel && `${engineLabel} · `}
               {formatRelativeTime(session.lastModified, Date.now())}
             </div>
           </div>

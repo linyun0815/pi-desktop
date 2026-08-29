@@ -20,7 +20,7 @@ Project is currently in **Alpha**. APIs, IPC contracts, on-disk config formats, 
 - **Vite** — Build tooling via electron-vite
 - **TailwindCSS v4** — Styling
 - **Zustand** — State management
-- **Pi RPC Mode** — JSONL-based subprocess communication
+- **Embedded Pi SDK** — `@earendil-works/pi-coding-agent` (exact-pinned), executed on Electron's bundled Node inside `utilityProcess.fork()` helpers via a versioned parent↔helper protocol (`src/shared/embedded-agent-protocol.ts`); no JSONL RPC, no external `pi` binary, no system Node
 
 ### Security
 
@@ -30,8 +30,9 @@ Project is currently in **Alpha**. APIs, IPC contracts, on-disk config formats, 
 - All IPC channels validated with typed contracts
 - No renderer access to Node APIs
 - Main-window navigation pinned to the packaged renderer; privileged IPC verifies the sender frame is the app renderer
-- Per-workspace trust gate: an untrusted workspace's own `.pi-desktop/permission-rules.json` allow rules are ignored, and its HTML preview runs without scripts/network, until the user trusts the workspace
-- Attachment reads limited to picked or in-workspace paths; session deletion confined to the Pi sessions dir; package specs validated before the Pi CLI runs
+- Per-workspace trust gate: an untrusted workspace's own `.pi-desktop/permission-rules.json` allow rules are ignored, its project Pi resources (settings/extensions/packages/skills) don't load, and its HTML preview runs without scripts/network, until the user trusts the workspace (one unified switch; legacy trust records require re-confirmation)
+- Attachment reads limited to picked or in-workspace paths; session deletion confined to the Pi sessions dir; package specs validated before the SDK package manager runs
+- The Electron utility helper is crash isolation only, NOT a security sandbox: Pi tools and loaded extensions keep the user's OS permissions
 
 ## Project Structure
 
@@ -41,6 +42,7 @@ Modules have colocated `*.test.ts` files (run with `npx tsx --test`).
 src/
 ├── shared/                       # Code shared by main + renderer (pure, typed)
 │   ├── ipc-contracts.ts          # Typed IPC channel definitions
+│   ├── embedded-agent-protocol.ts # Versioned parent<->helper protocol for the embedded Pi runtime (validated, structured-clone-only)
 │   ├── default-settings.ts       # Single source of truth for AppSettings defaults
 │   ├── council-config.ts         # Council planning config, prompts, parsers
 │   ├── models-config.ts          # Custom models.json validate/merge
@@ -62,9 +64,11 @@ src/
 │   ├── notify-decision.ts        # Pure should-we-notify decision (focus/active-workspace aware)
 │   ├── diagnostics.ts            # Assembles the Diagnostics view's report
 │   ├── diagnostics-report.ts     # Pure report helpers (provider key classification etc.)
-│   ├── pi-rpc-manager.ts         # Agent subprocess management (pi or omp), startup readiness probe, descendant-tree kill
-│   ├── pi-binary-resolution.ts   # Locate and identify installed pi/omp executables
-│   ├── pi-paths.ts               # Per-engine session-store roots; which engine owns a session file
+│   ├── pi-sdk-manager.ts         # PiSdkManager: one utility-process helper per live session (PiSdkManager), readiness, request correlation, graceful shutdown + tree kill
+│   ├── embedded-pi-worker.ts     # The utility-process helper: hosts AgentSessionRuntime from the Pi SDK (session + admin modes)
+│   ├── embedded-pi-admin.ts      # EmbeddedPiAdminManager: lazy admin helper for API-key auth + package management
+│   ├── process-tree.ts           # Cross-platform descendant enumeration + tree kill
+│   ├── pi-paths.ts               # Pi agent dir + session store roots (authorization gates)
 │   ├── session-trash.ts          # Deleted sessions go to the desktop trash (trash-cli, then gio)
 │   ├── path-authorization.ts     # Path containment checks (attachment/session IPC)
 │   ├── renderer-origin.ts        # Trusted-renderer URL check (navigation + IPC sender)
@@ -159,21 +163,22 @@ src/
 
 ## Features
 
-### Engines (Pi and OMP)
+### Embedded Pi runtime (Pi SDK)
 
-- The app runs either the standard `pi` CLI or the compatible `omp` binary from oh-my-pi. Settings → Agent Configuration picks one (auto-detect, detected install, or custom executable); `pi-binary-resolution.ts` locates and identifies installs.
-- The two engines keep separate session stores: Pi under `~/.pi/agent/sessions`, OMP under `~/.omp/agent/sessions`. OMP ignores `--session-dir` for new sessions, so no shared store is forced; the session index reads both roots.
-- Each session list row carries the engine that owns it (`SessionListItem.engine`, stamped from the store it was found in). Opening, forking, or resuming a session starts the engine that wrote it, not the configured default (`engineForBoundSession` in `pi-paths.ts` is the single rule).
-- Tool names differ per engine (Pi ships `find`/`ls`, OMP ships `glob`), so Plan/Read-only mode derives its tool list from the session's engine, never from the configured one.
-- Every surface that names the running agent (status bar, empty chat, permission prompts, Diagnostics, session tags) reads `shared/agent-engine-label.ts`; the permission extension gets the label via `PI_DESKTOP_AGENT_LABEL`. Session rows show the Pi/OMP tag only when both engines appear in one list.
-- OMP specifics: protocol-v2 chunked frames are decoded with the limits the engine advertises in its ready frame; OMP starts subagents in a new process group, so shutdown walks the descendant tree before signalling; OMP's plugin verbs back the package actions.
+- Pi ships as the exact-pinned `@earendil-works/pi-coding-agent` npm dependency, executed by Electron's own Node inside a `utilityProcess.fork()` helper per live session (`src/main/embedded-pi-worker.ts`, entry built to `out/main/embedded-pi-worker.js`). No external `pi` binary, no system Node; the build fails if Electron's bundled Node < 22.19.0 (`scripts/check-electron-node.mjs`).
+- `PiSdkManager` (`src/main/pi-sdk-manager.ts`) owns one helper per session: two-phase startup (helper `ready` frame → correlated `init` response + `sessionBound`), request correlation with per-command timeouts, helper `event`/`status-change`/`exit` emissions matching the old manager's surface, and graceful shutdown (abort → dispose → bye) with `killProcessTree` escalation via the utility PID (`process-tree.ts`).
+- The wire protocol lives in `src/shared/embedded-agent-protocol.ts` (versioned; every message structurally validated; SDK payloads JSON-rounded via `toTransferable` so only structured-clone-safe data crosses). Session targets: new → `SessionManager.create`, open → `open`, continue → `continueRecent`, fork → `forkFrom`, ephemeral → `inMemory`.
+- The helper converts SDK events into the renderer's established event shapes (`message_update` without `partial`, toolCall blocks re-attached for toolcall_* deltas, `thinking_level_changed` → `config_update`) and mirrors the SDK RPC mode's extension UI bridge over `parentPort` (`uiRequest` messages surface as ordinary `extension_ui_request` events, so the router and dialogs are unchanged). Helper `sessionBound` messages re-map the workspace runtime to the new session file (two helpers can never write one JSONL).
+- The old `PiRpcManager`, binary resolution, and `run-pi-cli.ts` are deleted. Renderer-facing IPC channels and event shapes are preserved; `piEngine`/`AgentEngineKind`/`PI_DETECT_INSTALLATIONS` and the OMP session store are removed (legacy `~/.omp` data stays untouched on disk).
+- Every surface that names the agent reads `shared/agent-engine-label.ts` (now the constant "Pi"); the permission extension gets the label via `PI_DESKTOP_AGENT_LABEL`.
+- Provider credentials: a lazy `EmbeddedPiAdminManager` runs a second helper mode (same worker entry, first message decides) for API-key login/logout via `ModelRuntime.login(providerId, "api_key", interaction)` and package install/remove/update via `DefaultPackageManager`. Secrets traverse one relay message and are never logged. Package ops without npm/git return a localized "optional tooling" error; without npm the session helpers set `PI_OFFLINE=1` so missing configured packages are skipped-and-diagnosed instead of auto-installed.
 
 ### Workspace Management
 
 - Mission Control summarizes all live session runtimes and workflow runs across projects; New Task launches a prompt into a dedicated background runtime
 - New Task can create or reuse an isolated Git worktree (matching task metadata, explicit branches, and GitHub PR URLs are detected), and Diff Review exposes explicit Commit → Push → PR actions with upstream-aware GitHub CLI routing
 - Multiple workspaces (project directories)
-- Each workspace owns a file service; every live session in that project owns an independent Pi process bound to that workspace cwd and its own `--session` file
+- Each workspace owns a file service; every live session in that project owns an independent embedded Pi helper (utility process) bound to that workspace cwd and its own session file
 - Session navigation is immediate; Pi startup and history hydration continue in the background
 - Default workspace: user's home directory
 - Workspace switcher in sidebar
@@ -309,7 +314,7 @@ Click the status icon in the sidebar header to see:
 - Show thinking blocks, auto-scroll
 - Every field (theme, permission mode, toggles, font sizes) live-previews before Save via a unified settings draft (`store.ts` `settingsDraft`); survives view switches; Save persists, Reset restores `DEFAULT_SETTINGS`
 - Permission rules: user-defined allow/deny rules (glob per Pi tool) that overlay the permission modes. Deny beats allow beats mode default; deny applies in every mode. Global rules live in `<GUI data dir>/permission-rules.json`. A workspace `.pi-desktop/permission-rules.json` is gated by workspace trust: when the workspace is trusted it fully replaces the global rules; when untrusted (the default) only its deny rules apply, layered on top of the global rules, and its allow rules are ignored (a repo can tighten, never grant). Opening a workspace whose rules file contains allow rules shows a trust prompt; the editor's Global tab notes the override and the This workspace tab carries a Trust/Revoke control. Settings → Behavior edits BOTH scopes via Global | This workspace tabs: create, edit, and remove workspace rules (in-app danger confirm), Copy from global (seeds an unsaved draft from the current global list), and per-scope JSON import/export. Manual editing of either file on disk remains fully supported — switching scope tabs re-reads that file when the scope has no unsaved draft, so hand-edited rules show up without a restart. Engine: `resources/permission-rules.ts`, shared by the Pi extension (jiti relative import, mtime-cached live re-read) and the main process. The permissions extension always loads alongside Pi when present on disk, regardless of mode or whether rules currently exist, so a rules file created mid-session is enforced immediately rather than after a restart.
-  - Trust posture: a workspace's `.pi-desktop/permission-rules.json` is repo content, so its allow rules take effect only after the user explicitly trusts the workspace (persisted in `trusted-workspaces.json`; surfaced as a trust prompt on open and a control in Settings). Until trusted, the repo can only add deny rules — it cannot suppress ask-mode prompts. Rule globs match raw tool input strings only (no path canonicalization, no command parsing), so rules are a guardrail against accidents, not a security sandbox.
+  - Trust posture: a workspace's `.pi-desktop/permission-rules.json` is repo content, so its allow rules take effect only after the user explicitly trusts the workspace. `trusted-workspaces.json` is versioned (`{version:2, trusted, pendingReconfirmation}`); legacy v1 array records are demoted to `pendingReconfirmation` on first read and a re-confirm prompt on the workspace's next open promotes them. Trust is the ONE unified switch: it authorizes the workspace's allow rules, its project Pi resources (`.pi/settings.json`, extensions, packages, skills — passed to the helper as `projectTrusted`), and its interactive HTML preview. Trusting/revoking restarts the workspace's live helpers so all three take effect together. Until trusted, the repo can only add deny rules — it cannot suppress ask-mode prompts. Rule globs match raw tool input strings only (no path canonicalization, no command parsing), so rules are a guardrail against accidents, not a security sandbox; the Electron helper is not an OS sandbox either.
 - Custom models & providers editor — edits `~/.pi/agent/models.json` (applied on Pi restart)
 - All settings persisted to `~/.pi-desktop-gui/settings.json`; defaults come from the single shared `src/shared/default-settings.ts` (used to seed the file AND for the renderer's initial/Reset values)
 
@@ -345,13 +350,15 @@ data-dir migration the GUI's files live under the OS app-data dir
 | `~/.pi-desktop-gui/workspaces.json` | Workspace list and active workspace |
 | `~/.pi-desktop-gui/settings.json` | App settings |
 | `~/.pi-desktop-gui/session-tags.json` | Session tags |
-| `~/.pi-desktop-gui/trusted-workspaces.json` | Workspaces the user has trusted (enables their allow rules + interactive HTML preview) |
+| `~/.pi-desktop-gui/trusted-workspaces.json` | Versioned workspace trust registry (v2: `trusted` + `pendingReconfirmation`; enables allow rules, project Pi resources, and interactive HTML preview) |
 | `~/.pi-desktop-gui/activity-stats.json` | Persisted per-day activity stats (aggregates only, survives session deletion) |
 | `~/.pi-desktop-gui/app-log.jsonl` | Main-process app log (warnings/errors for the Diagnostics view) |
-| `~/.pi/agent/sessions/` | Pi session files (organized by cwd) |
-| `~/.omp/agent/sessions/` | OMP session files (same layout; OMP writes here regardless of flags) |
-| `~/.pi/agent/settings.json` | Pi global settings |
-| `.pi/settings.json` | Pi project settings |
+| `~/.pi/agent/sessions/` | Pi session files (organized by cwd; the only store the index reads) |
+| `~/.pi/agent/settings.json` | Pi global settings (reused in place by the embedded runtime) |
+| `~/.pi/agent/auth.json` | Provider credentials written by SDK API-key login |
+| `~/.pi/agent/models.json` | Pi model/provider config (edited by Settings; idle helpers hot-reload) |
+| `.pi/settings.json` | Pi project settings (loaded only for trusted workspaces) |
+| *(legacy)* `~/.omp/agent/` | Old OMP data — never read, listed, or migrated; left untouched on disk |
 
 ## Distribution
 
@@ -372,29 +379,31 @@ Distribution is via pre-built binaries only — never `npm publish`. The `bin/pi
 ## Development
 
 ```bash
-npm install           # Install dependencies
+npm install           # Install dependencies (Node >= 22.19.0 for source builds)
 npm run dev           # Build and launch (reliable)
 npm run dev:hot       # Dev mode with hot reload (may have race condition)
-npm run build         # Build only
+npm run build         # Build only (runs the Electron-Node gate + license manifest)
 npm run preview       # Launch built app
 npm run package       # Create installer
+npm run verify:embedded-pi [-- --smoke]  # Verify pinned SDK + worker + resources; --smoke boots an in-memory session on Electron's Node
+npm run licenses      # Regenerate resources/THIRD-PARTY-LICENSES.md
 ```
 
 ## Pi Integration
 
-The agent runs in RPC mode as a subprocess; one `PiRpcManager` is retained for each live session runtime. The binary is `pi` or `omp` depending on the session's engine (see Engines above):
+The Pi coding agent runs as an **embedded SDK**; one `PiSdkManager` is retained for each live session runtime, and each manager drives one Electron utility process (`utilityProcess.fork`) loading `@earendil-works/pi-coding-agent` (exact-pinned; see Engines above):
 
 ```
-pi --mode rpc [--session <session-file>] [--provider <name>] [--model <id>] [--no-session]
+PiSdkManager --utilityProcess.fork(out/main/embedded-pi-worker.js)--> helper
+helper: import SDK -> SettingsManager + ModelRuntime + DefaultResourceLoader
+        -> AgentSessionRuntime (AgentSession) bound to cwd + session target
 ```
 
-No `--session-dir` is injected; each engine uses its own default store. A caller-supplied `--session-dir` in extra args still wins.
-
-Communication via JSONL over stdin/stdout:
-- Commands sent to stdin (one JSON object per line)
-- Events streamed from stdout (one JSON object per line)
-- Request/response correlation via `id` field
-- Extension UI protocol for interactive dialogs
+Communication via the versioned protocol in `src/shared/embedded-agent-protocol.ts` over `process.parentPort`:
+- Parent → helper: `init`, prompt/steer/followUp, abort, model/thinking, session state/mutations, compaction, bash, `extensionUiResponse`, `reloadModelConfig`, `shutdown`
+- Helper → parent: `ready`/`fatal`, correlated `response` envelopes (same shape the renderer has always received), renderer-shaped `event`s, `uiRequest`, `sessionBound`, `log`, `bye`
+- Extension UI protocol (select/confirm/input/editor/notify/...) flows as `uiRequest` messages into the existing dialog router
+- The renderer no longer passes arbitrary CLI arguments or `--session-dir`; session paths are authorized in main against Pi's own session store
 
 ## Versioning
 

@@ -239,40 +239,13 @@ export function buildDebatePrompt(
  * on the command line would allow shell-metacharacter injection. Keeping only
  * static flags in argv closes that vector.
  */
-export type CouncilPiEngine = "pi" | "omp";
-
 export function buildConsultantCommand(
-  id: CouncilAgentId,
+  id: Exclude<CouncilAgentId, "pi">,
   executable: string,
-  engine: CouncilPiEngine = "pi",
 ): { file: string; args: string[] } {
   switch (id) {
-    case "pi":
-      // Non-interactive JSON mode streams the same events the app already speaks.
-      // Exclude bash/edit/write so the planning run is genuinely read-only —
-      // bash would otherwise let an injected plan run shell commands. --no-session
-      // keeps it ephemeral.
-      return {
-        file: executable,
-        args:
-          engine === "omp"
-            ? [
-                "-p",
-                "--mode",
-                "json",
-                "--no-session",
-                "--tools",
-                "read,grep,glob",
-              ]
-            : [
-                "-p",
-                "--mode",
-                "json",
-                "--no-session",
-                "--exclude-tools",
-                "bash,edit,write",
-              ],
-      };
+    // Pi consultants no longer spawn a CLI: the embedded SDK task helper
+    // (council-manager's runPiSdkConsultant) hosts them in-memory read-only.
     case "claude":
       // stream-json + partial messages let us render Claude's plan live as it
       // is generated (plain `-p` text mode only prints the final answer at the

@@ -10,7 +10,7 @@ import {
   setWorkflowPersistence,
 } from "../workflow-monitor";
 import { secureIpcMain as ipcMain, isString } from "./validation";
-import type { PiRpcManager } from "../pi-rpc-manager";
+import type { PiSdkManager } from "../pi-sdk-manager";
 import type { IpcContext } from "./context";
 
 /**
@@ -29,16 +29,12 @@ async function findWorkspace(ctx: IpcContext, workspaceId: string) {
 }
 
 /** Probe the workspace's Pi for the `/workflows` extension command. */
-async function hasWorkflowsExtension(pi: PiRpcManager): Promise<boolean> {
-  const command =
-    pi.getEngineKind() === "omp" ? "get_available_commands" : "get_commands";
-  const response = (await pi.sendCommand({ type: command })) as {
-    success?: boolean;
-    data?: { commands?: Array<{ name?: unknown; source?: unknown }> };
-  } | null;
-  if (!response?.success || !Array.isArray(response.data?.commands))
-    return false;
-  return response.data.commands.some(
+async function hasWorkflowsExtension(pi: PiSdkManager): Promise<boolean> {
+  const response = await pi.listCommands();
+  if (!response.success || !response.data) return false;
+  const commands = (response.data as { commands?: Array<{ name?: unknown; source?: unknown }> }).commands;
+  if (!Array.isArray(commands)) return false;
+  return commands.some(
     (candidate) =>
       candidate?.name === "workflows" && candidate?.source === "extension",
   );
@@ -123,10 +119,7 @@ export function registerWorkflowHandlers(ctx: IpcContext): void {
       try {
         // Extension commands execute immediately in Pi, even during streaming —
         // no LLM turn is started for a registered command.
-        await pi.sendCommand({
-          type: "prompt",
-          message: `/workflows ${action} ${runId}`,
-        });
+        await pi.prompt(`/workflows ${action} ${runId}`);
         return { action, runId, ok: true, dispatched: true };
       } catch (error) {
         return fail(isTimeoutError(error) ? "timeout" : "dispatch-failed");

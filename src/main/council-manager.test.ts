@@ -6,7 +6,7 @@ import {
   runArbiter,
   type SpawnConsultant,
 } from './council-manager'
-import { COUNCIL_AGENT_IDS, buildConsultantCommand } from '../shared/council-config'
+import { buildConsultantCommand } from '../shared/council-config'
 import type { CouncilAgentId, ConsultantResult } from '../shared/council-config'
 
 function fakeSpawn(map: Record<string, { ok: boolean; output?: string; error?: string; timedOut?: boolean }>): SpawnConsultant {
@@ -34,21 +34,8 @@ test('buildConsultantSpawn quotes a spaced shim path for the Windows cmd.exe hop
   ])
 })
 
-test('buildConsultantSpawn escapes cmd metacharacters in a Windows shim path', () => {
-  const spawn = buildConsultantSpawn('pi', String.raw`C:\Users\Tom & Jerry\100%\pi.cmd`, true)
-  assert.equal(spawn.file, String.raw`"C:\Users\Tom & Jerry\100"^%"\pi.cmd"`)
-  assert.deepEqual(spawn.args, [
-    '-p',
-    '--mode',
-    'json',
-    '--no-session',
-    '--exclude-tools',
-    'bash,edit,write',
-  ])
-})
-
-test('buildConsultantSpawn passes every agent through byte-identically off Windows', () => {
-  for (const id of COUNCIL_AGENT_IDS) {
+test('buildConsultantSpawn passes CLI agents through byte-identically off Windows', () => {
+  for (const id of ['claude', 'codex'] as const) {
     const executable = `/usr/local/bin/my agents/${id}`
     const command = buildConsultantCommand(id, executable)
     assert.deepEqual(buildConsultantSpawn(id, executable, false), {
@@ -57,7 +44,6 @@ test('buildConsultantSpawn passes every agent through byte-identically off Windo
     }, id)
   }
 })
-
 test('arbiter mode: contributed and errored are labeled', async () => {
   const results = await runConsultants(
     { request: 'r', members: ['claude', 'codex'], cwd: '/tmp', timeoutSeconds: 1, consensusMode: 'arbiter' },

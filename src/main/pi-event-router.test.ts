@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PiRpcManager } from "./pi-rpc-manager";
+import { PiSdkManager } from "./pi-sdk-manager";
 import { createPiEventRouter, type PiEventRouter } from "./pi-event-router";
 import type {
   PendingPromptCounts,
@@ -54,17 +54,17 @@ interface RecordedResponse {
 
 interface Harness {
   router: PiEventRouter;
-  managers: Map<string, PiRpcManager>;
+  managers: Map<string, PiSdkManager>;
   broadcasts: PiRpcEvent[];
   countsLog: PendingPromptCounts[];
   responses: RecordedResponse[];
   clock: { now: number };
   setActive(workspaceId: string | null): void;
-  addManager(workspaceId: string): PiRpcManager;
+  addManager(workspaceId: string): PiSdkManager;
 }
 
 /**
- * Drives the router with real PiRpcManager instances used as bare emitters (no
+ * Drives the router with real PiSdkManager instances used as bare emitters (no
  * child process is ever spawned). Responses are recorded per workspace by
  * overriding sendExtensionUiResponse, which would otherwise no-op silently
  * because the managers are not running.
@@ -73,7 +73,7 @@ function createHarness(
   workspaceIds: string[],
   activeId: string | null = workspaceIds[0] ?? null,
 ): Harness {
-  const managers = new Map<string, PiRpcManager>();
+  const managers = new Map<string, PiSdkManager>();
   const broadcasts: PiRpcEvent[] = [];
   const countsLog: PendingPromptCounts[] = [];
   const responses: RecordedResponse[] = [];
@@ -94,8 +94,8 @@ function createHarness(
     now: () => clock.now,
   });
 
-  const addManager = (workspaceId: string): PiRpcManager => {
-    const manager = new PiRpcManager();
+  const addManager = (workspaceId: string): PiSdkManager => {
+    const manager = new PiSdkManager();
     manager.sendExtensionUiResponse = (id, response): void => {
       responses.push({ workspaceId, id, response });
     };
@@ -158,7 +158,6 @@ test("active manager status changes broadcast as status_change events", () => {
       status: "stopped",
       pid: null,
       error: null,
-      engine: "pi",
     },
   ]);
 });

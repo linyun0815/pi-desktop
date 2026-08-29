@@ -31,7 +31,9 @@ jobs:
         uses: >-
           actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: "20"
+          # The embedded Pi SDK requires Node >= 22.19.0 (enforced by
+          # scripts/check-electron-node.mjs at build time).
+          node-version: "22"
           cache: "npm"
 
       - name: Install dependencies
@@ -83,7 +85,9 @@ jobs:
         uses: >-
           actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: "20"
+          # The embedded Pi SDK requires Node >= 22.19.0 (enforced by
+          # scripts/check-electron-node.mjs at build time).
+          node-version: "22"
           cache: "npm"
 
       # postinstall validates node-pty's bundled Node-API files and Electron.
@@ -98,6 +102,13 @@ jobs:
 
       - name: Build renderer/main/preload
         run: npm run build
+
+      # Verifies the pinned SDK version, the built utility worker, and the
+      # SDK's dist resources before packaging. (--smoke additionally boots an
+      # in-memory session on Electron's Node with a scrubbed PATH; keep the
+      # packaged-artifact check lighter here.)
+      - name: Verify embedded Pi artifacts
+        run: node scripts/verify-embedded-pi.mjs
 
       - name: Package with electron-builder
         shell: bash

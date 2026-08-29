@@ -1,29 +1,20 @@
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { clsx } from "clsx";
 import type {
-  AgentDetectionOptions,
-  AgentEngine,
-  AgentInstallation,
   AppSettings,
   PermissionMode,
   CouncilConfig,
   PermissionRule,
   PermissionRulesScope,
   PermissionRulesWorkspaceStatus,
+  ProviderAuthInfo,
 } from "../../../shared/ipc-contracts";
 import type { ThemeFile } from "../../../shared/theme/theme-file";
 import {
   Settings,
   Save,
   RotateCcw,
-  FolderOpen,
-  FolderTree,
-  RefreshCw,
   Check,
   ChevronDown,
 } from "lucide-react";
@@ -81,6 +72,13 @@ const EMPTY_SCOPE_RULES: ScopeRulesState = {
 };
 
 export function SettingsPanel(): React.JSX.Element {
+  const [sdkVersion, setSdkVersion] = useState<string>("…");
+  useEffect(() => {
+    void window.piDesktop.system
+      .getVersion()
+      .then((v) => setSdkVersion(v.piSdk))
+      .catch(() => setSdkVersion("未知"));
+  }, []);
   const settings = useAppStore((state) => state.settings);
   const loadSettings = useAppStore((state) => state.loadSettings);
   const setSettingsDraft = useAppStore((state) => state.setSettingsDraft);
@@ -91,31 +89,7 @@ export function SettingsPanel(): React.JSX.Element {
   // what makes edits survive leaving/returning to Settings without saving.
   const draft0 = useAppStore.getState().settingsDraft;
 
-  const initialPiPath =
-    draft0.piExecutablePath ??
-    settings?.piExecutablePath ??
-    DEFAULT_SETTINGS.piExecutablePath;
-  const initialPiEngine =
-    draft0.piEngine ?? settings?.piEngine ?? DEFAULT_SETTINGS.piEngine;
-  const [piPath, setPiPath] = useState(initialPiPath);
-  const [piEngine, setPiEngine] = useState<AgentEngine>(initialPiEngine);
-  // The setting above may be 'auto'; this is the engine that actually resolved,
-  // which is what any sentence naming the running agent has to say.
-  const runningEngineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
-  const [customAgentPathMode, setCustomAgentPathMode] = useState(() => {
-    const normalized = initialPiPath.trim().toLowerCase();
-    return (
-      Boolean(initialPiPath.trim()) &&
-      normalized !== "pi" &&
-      normalized !== "omp"
-    );
-  });
-  const [detectedAgentInstalls, setDetectedAgentInstalls] = useState<
-    AgentInstallation[]
-  >([]);
-  const [scanningAgentInstalls, setScanningAgentInstalls] = useState(false);
+  // The agent is embedded; only its credential providers are configurable here.
   const [theme, setTheme] = useState(
     draft0.theme ?? settings?.theme ?? DEFAULT_SETTINGS.theme,
   );
@@ -203,43 +177,12 @@ export function SettingsPanel(): React.JSX.Element {
   const [timeoutDraft, setTimeoutDraft] = useState("");
   const agentScanToken = useRef(0);
 
-  const scanAgentInstallations = useCallback(
-    async (options?: AgentDetectionOptions): Promise<void> => {
-      const token = ++agentScanToken.current;
-      setScanningAgentInstalls(true);
-      try {
-        const result = await window.piDesktop.pi.detectInstallations(options);
-        if (token === agentScanToken.current)
-          setDetectedAgentInstalls(result.installations);
-      } catch {
-        if (token === agentScanToken.current) setDetectedAgentInstalls([]);
-      } finally {
-        if (token === agentScanToken.current) setScanningAgentInstalls(false);
-      }
-    },
-    [],
-  );
-
   useEffect(
     () => () => {
       agentScanToken.current++;
     },
     [],
   );
-
-  // Detect available agent engines on mount. Cached results are fine here —
-  // only the explicit Rescan below needs a fresh look at the disk.
-  useEffect(() => {
-    void scanAgentInstallations();
-  }, [scanAgentInstallations]);
-
-  useEffect(() => {
-    const installation = detectedAgentInstalls.find(
-      (candidate) => candidate.path === piPath,
-    );
-    if (installation && installation.kind === piEngine)
-      setCustomAgentPathMode(false);
-  }, [detectedAgentInstalls, piEngine, piPath]);
 
   // Detect available council agents on mount
   useEffect(() => {
@@ -375,16 +318,6 @@ export function SettingsPanel(): React.JSX.Element {
     didInitRef.current = true;
     const store = useAppStore.getState();
     const draft = store.settingsDraft;
-    const nextPiPath = draft.piExecutablePath ?? settings.piExecutablePath;
-    const nextPiEngine = draft.piEngine ?? settings.piEngine;
-    setPiPath(nextPiPath);
-    setPiEngine(nextPiEngine);
-    const normalizedPiPath = nextPiPath.trim().toLowerCase();
-    setCustomAgentPathMode(
-      Boolean(nextPiPath.trim()) &&
-        normalizedPiPath !== "pi" &&
-        normalizedPiPath !== "omp",
-    );
     setTheme(draft.theme ?? settings.theme);
     setFontSize(draft.fontSize ?? settings.fontSize);
     setTerminalFontSize(draft.terminalFontSize ?? settings.terminalFontSize);
@@ -406,80 +339,6 @@ export function SettingsPanel(): React.JSX.Element {
     );
     setPermissionMode(draft.permissionMode ?? settings.permissionMode);
   }, [settings]);
-
-  const setAgentPath = (path: string, custom = true): void => {
-    setPiPath(path);
-    setCustomAgentPathMode(custom);
-    setSettingsDraft({ piExecutablePath: path });
-  };
-
-  const setAgentEngine = (engine: AgentEngine): void => {
-    setPiEngine(engine);
-    setSettingsDraft({ piEngine: engine });
-  };
-
-  const handleAgentSelection = (value: string): void => {
-    if (value === "__auto__") {
-      setAgentPath("pi", false);
-      setAgentEngine("auto");
-      return;
-    }
-    if (value === "__custom__") {
-      if (!customAgentPathMode) setAgentPath("", true);
-      return;
-    }
-    const installation = detectedAgentInstalls.find(
-      (candidate) => candidate.path === value,
-    );
-    setAgentPath(value, false);
-    setAgentEngine(
-      installation?.kind ?? (value.toLowerCase() === "omp" ? "omp" : "auto"),
-    );
-  };
-
-  const applySelectedAgentPath = (path: string): void => {
-    const installation = detectedAgentInstalls.find(
-      (candidate) => candidate.path === path,
-    );
-    setAgentPath(path);
-    if (installation) setAgentEngine(installation.kind);
-  };
-
-  const handleSelectPath = async (): Promise<void> => {
-    const path = await window.piDesktop.system.openDialog({
-      title: "选择代理可执行文件",
-      mode: "file",
-    });
-    if (path) applySelectedAgentPath(path);
-  };
-
-  const handleSelectDirectory = async (): Promise<void> => {
-    const path = await window.piDesktop.system.openDialog({
-      title: "选择代理安装目录",
-      mode: "directory",
-    });
-    if (path) applySelectedAgentPath(path);
-  };
-
-  const autoAgentSelection =
-    !customAgentPathMode &&
-    (piPath.trim().toLowerCase() === "pi" || piPath.trim() === "");
-  const detectedAgentSelection =
-    !customAgentPathMode &&
-    detectedAgentInstalls.some((installation) => installation.path === piPath);
-  const agentSelection = customAgentPathMode
-    ? "__custom__"
-    : autoAgentSelection
-      ? "__auto__"
-      : detectedAgentSelection
-        ? piPath
-        : piPath.trim().toLowerCase() === "omp" &&
-            !detectedAgentInstalls.some(
-              (installation) => installation.kind === "omp",
-            )
-          ? "omp"
-          : "__custom__";
-  const showCustomAgentPath = customAgentPathMode || agentSelection === "omp";
 
   const resolveEffectiveThemeId = (themeId: string): string => {
     if (themeId !== "system") return themeId;
@@ -683,8 +542,6 @@ export function SettingsPanel(): React.JSX.Element {
     }
 
     const updated: Partial<AppSettings> = {
-      piExecutablePath: piPath,
-      piEngine,
       theme,
       fontSize,
       terminalFontSize,
@@ -746,8 +603,6 @@ export function SettingsPanel(): React.JSX.Element {
     // model/provider/cwd, collapsed groups) are left as-is by the Partial merge.
     // Values come from the shared DEFAULT_SETTINGS so there's one source of truth.
     const defaults: Partial<AppSettings> = {
-      piExecutablePath: DEFAULT_SETTINGS.piExecutablePath,
-      piEngine: DEFAULT_SETTINGS.piEngine,
       theme: DEFAULT_SETTINGS.theme,
       fontSize: DEFAULT_SETTINGS.fontSize,
       terminalFontSize: DEFAULT_SETTINGS.terminalFontSize,
@@ -762,9 +617,6 @@ export function SettingsPanel(): React.JSX.Element {
       permissionMode: DEFAULT_SETTINGS.permissionMode,
     };
 
-    setPiPath(defaults.piExecutablePath!);
-    setPiEngine(defaults.piEngine!);
-    setCustomAgentPathMode(false);
     setTheme(defaults.theme!);
     setFontSize(defaults.fontSize!);
     setTerminalFontSize(defaults.terminalFontSize!);
@@ -805,102 +657,21 @@ export function SettingsPanel(): React.JSX.Element {
           </div>
         </div>
 
-        {/* Agent Configuration */}
-        <SettingsSection title="代理配置">
+        {/* Embedded Agent */}
+        <SettingsSection title="内嵌 Pi">
           <SettingsRow
-            label="代理安装"
-            description="自动检测 Pi 和 OMP，选择已安装的引擎，或使用自定义可执行文件/路径。"
-            stack
+            label="运行时"
+            description="Pi 以 SDK 形式内嵌于应用中，随应用一起更新，无需单独安装 Pi 或 Node。"
           >
-            <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <select
-                  value={agentSelection}
-                  onChange={(e) => handleAgentSelection(e.target.value)}
-                  className="min-w-0 flex-1 appearance-none rounded-md border border-border-strong bg-surface px-3 py-1.5 text-sm text-primary hover:border-border-strong-hover focus:border-focus focus:outline-none"
-                >
-                  <option value="__auto__">
-                    自动检测（优先 Pi，其次 OMP）
-                  </option>
-                  {detectedAgentInstalls.map((installation) => (
-                    <option
-                      key={`${installation.kind}:${installation.path}`}
-                      value={installation.path}
-                    >
-                      {installation.kind === "omp" ? "OMP" : "Pi"} —{" "}
-                      {installation.path}
-                    </option>
-                  ))}
-                  {agentSelection === "omp" && (
-                    <option value="omp">OMP（未找到）</option>
-                  )}
-                  <option value="__custom__">自定义路径…</option>
-                </select>
-                <button
-                  onClick={handleSelectPath}
-                  title="选择代理可执行文件"
-                  aria-label="选择代理可执行文件"
-                  className="rounded-md border border-border-strong px-3 py-1.5 text-sm text-muted hover:bg-surface-hover transition-colors"
-                >
-                  <FolderOpen size={14} />
-                </button>
-                <button
-                  onClick={handleSelectDirectory}
-                  title="选择代理安装目录"
-                  aria-label="选择代理安装目录"
-                  className="rounded-md border border-border-strong px-3 py-1.5 text-sm text-muted hover:bg-surface-hover transition-colors"
-                >
-                  <FolderTree size={14} />
-                </button>
-                <button
-                  // Forced: the user clicks this right after installing an
-                  // engine, so the cached detection result would be stale.
-                  onClick={() => void scanAgentInstallations({ force: true })}
-                  disabled={scanningAgentInstalls}
-                  title="重新扫描已安装的代理"
-                  aria-label="重新扫描已安装的代理"
-                  className="rounded-md border border-border-strong px-3 py-1.5 text-sm text-muted hover:bg-surface-hover transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw
-                    size={14}
-                    className={
-                      scanningAgentInstalls ? "animate-spin" : undefined
-                    }
-                  />
-                </button>
-              </div>
-              {showCustomAgentPath && (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={piPath}
-                    onChange={(e) => setAgentPath(e.target.value)}
-                    placeholder="可执行文件、cli.js 或安装目录的路径"
-                    className="min-w-0 flex-1 rounded-md border border-border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-focus focus:outline-none"
-                  />
-                  <select
-                    value={piEngine}
-                    onChange={(e) =>
-                      setAgentEngine(e.target.value as AgentEngine)
-                    }
-                    aria-label="代理引擎"
-                    className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-sm text-primary focus:border-focus focus:outline-none"
-                  >
-                    <option value="auto">自动</option>
-                    <option value="pi">Pi</option>
-                    <option value="omp">OMP</option>
-                  </select>
-                </div>
-              )}
-              <div className="text-xs text-dim">
-                {scanningAgentInstalls
-                  ? "正在扫描常见安装位置和 PATH…"
-                  : detectedAgentInstalls.length > 0
-                    ? `检测到 ${detectedAgentInstalls.length} 个已安装的引擎`
-                    : "尚未检测到 Pi 或 OMP 安装"}
-              </div>
-            </div>
+            <div className="text-sm text-muted">内嵌 Pi SDK v{sdkVersion}</div>
           </SettingsRow>
+        </SettingsSection>
+
+        {/* Provider credentials */}
+        <SettingsSection title="提供商凭据">
+          <ProviderCredentialsSection
+            onNotice={(message) => useAppStore.getState().setAuthNotice(message)}
+          />
         </SettingsSection>
 
         {/* Appearance */}
@@ -1395,7 +1166,7 @@ export function SettingsPanel(): React.JSX.Element {
               启用委员会规划？
             </h3>
             <p className="mb-6 text-sm text-muted">
-              每次运行都会在 {runningEngineLabel} 之外启动 Claude 和
+              每次运行都会在 Pi 之外启动 Claude 和
               Codex，可能显著增加 Token 用量和积分/API
               成本。请确认能够接受额外支出后再启用。
             </p>
@@ -1498,5 +1269,127 @@ function Toggle({
         }`}
       />
     </button>
+  );
+}
+
+/**
+ * Provider credentials section: lists the SDK's providers with their
+ * non-sensitive credential status and offers API-key login/logout. Secrets
+ * pass once through the auth modal into the admin helper; this component only
+ * ever sees booleans and source labels.
+ */
+function ProviderCredentialsSection({
+  onNotice,
+}: {
+  onNotice: (message: string | null) => void;
+}): React.JSX.Element {
+  const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busyProvider, setBusyProvider] = useState<string | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      const result = await window.piDesktop.auth.listProviders();
+      setProviders(result.providers);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(formatUiError(err));
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const handleLogin = async (providerId: string): Promise<void> => {
+    setBusyProvider(providerId);
+    onNotice("登录中…");
+    try {
+      const result = await window.piDesktop.auth.login(providerId);
+      if (result.ok) {
+        onNotice(null);
+      } else if (result.canceled) {
+        onNotice(null);
+      } else {
+        onNotice(`登录失败：${result.error}`);
+      }
+    } catch (err) {
+      onNotice(`登录失败：${formatUiError(err)}`);
+    } finally {
+      setBusyProvider(null);
+      await refresh();
+    }
+  };
+
+  const handleLogout = async (providerId: string): Promise<void> => {
+    setBusyProvider(providerId);
+    try {
+      const result = await window.piDesktop.auth.logout(providerId);
+      if (!result.ok) onNotice(`登出失败：${result.error}`);
+      else onNotice(null);
+    } catch (err) {
+      onNotice(`登出失败：${formatUiError(err)}`);
+    } finally {
+      setBusyProvider(null);
+      await refresh();
+    }
+  };
+
+  if (!loaded) {
+    return <div className="text-xs text-dim">正在读取提供商列表…</div>;
+  }
+  if (loadError) {
+    return <div className="text-xs text-dim">无法读取提供商：{loadError}</div>;
+  }
+  if (providers.length === 0) {
+    return (
+      <div className="text-xs text-dim">
+        尚无可用提供商。可在“模型配置”中添加自定义提供商。
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {providers.map((provider) => (
+        <div
+          key={provider.providerId}
+          className="flex items-center justify-between gap-4 rounded-md border border-border-strong px-3 py-2"
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm text-primary">
+              {provider.providerId}
+            </div>
+            <div className="text-xs text-dim">
+              {provider.configured
+                ? `已配置${provider.source ? `（${provider.source}）` : ""}`
+                : "未配置"}
+            </div>
+          </div>
+          <div className="shrink-0">
+            {provider.configured ? (
+              <button
+                onClick={() => void handleLogout(provider.providerId)}
+                disabled={busyProvider !== null}
+                className="rounded-md border border-border-strong px-3 py-1 text-xs text-muted hover:bg-surface-hover transition-colors disabled:opacity-50"
+              >
+                {busyProvider === provider.providerId ? "处理中…" : "登出"}
+              </button>
+            ) : (
+              <button
+                onClick={() => void handleLogin(provider.providerId)}
+                disabled={busyProvider !== null || !provider.apiKeySupported}
+                className="rounded-md bg-accent px-3 py-1 text-xs text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {busyProvider === provider.providerId ? "处理中…" : "API Key 登录"}
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

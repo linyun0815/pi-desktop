@@ -1,6 +1,6 @@
 import { IPC_CHANNELS, type PendingPromptCounts } from '../shared/ipc-contracts'
 import { createPiEventRouter, type PiEventRouter } from './pi-event-router'
-import type { PiRpcManager } from './pi-rpc-manager'
+import type { PiSdkManager } from './pi-sdk-manager'
 
 /**
  * Wiring for the extension-UI half of the IPC surface: the Pi event router,
@@ -22,9 +22,9 @@ export type IpcInvokeRegistrar<TEvent> = (
 
 /** The slice of WorkspaceManager this wiring depends on. */
 export interface ExtensionUiWorkspace {
-  getActivePiManager(): PiRpcManager | null
-  workspaceIdFor(manager: PiRpcManager): string | null
-  onPiManager(listener: (manager: PiRpcManager) => void): void
+  getActivePiManager(): PiSdkManager | null
+  workspaceIdFor(manager: PiSdkManager): string | null
+  onPiManager(listener: (manager: PiSdkManager) => void): void
   onActiveWorkspaceChanged(listener: (workspaceId: string | null) => void): void
 }
 

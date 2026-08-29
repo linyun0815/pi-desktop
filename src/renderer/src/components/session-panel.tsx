@@ -29,10 +29,6 @@ import {
 } from "./session-menu-position";
 import { resolveRunSessionId } from "../utils/workflow-runs";
 import { SessionRuntimeIndicator } from "./session-runtime-indicator";
-import {
-  getSessionEngineLabel,
-  hasMixedSessionEngines,
-} from "./sidebar-session-labels";
 
 export function SessionPanel(): React.JSX.Element {
   const sessionList = useAppStore((state) => state.sessionList);
@@ -136,13 +132,6 @@ export function SessionPanel(): React.JSX.Element {
         ([_, sessions]) => (sessions as SessionListItem[]).length > 0,
       ) as [string, SessionListItem[]][];
   }, [groupedSessions, searchQuery]);
-
-  // Engine tags are gated on the whole known list, not on the filtered groups,
-  // so a row keeps the same tag while the user searches or changes scope.
-  const showEngineTags = useMemo(
-    () => hasMixedSessionEngines(sessionList),
-    [sessionList],
-  );
 
   // Workspace auto-switch/create + session switch + show Chat, shared with the
   // sidebar and the quick switcher.
@@ -384,7 +373,6 @@ export function SessionPanel(): React.JSX.Element {
                             sessionRuntimes[activeSessionRuntimeId ?? ""]
                               ?.sessionPath === session.path
                           }
-                          showEngineTag={showEngineTags}
                           onSelect={() => handleSwitchSession(session)}
                         />
                       ))}
@@ -422,12 +410,10 @@ function formatRelativeTime(timestamp: number): string {
 function SessionEntry({
   session,
   isActive,
-  showEngineTag,
   onSelect,
 }: {
   session: SessionListItem;
   isActive: boolean;
-  showEngineTag: boolean;
   onSelect: () => void;
 }): React.JSX.Element {
   const sessionTags = useAppStore((state) => state.sessionTags);
@@ -447,7 +433,6 @@ function SessionEntry({
   const tags = sessionTags[session.sessionId] ?? [];
   const autoTag = autoTags[session.sessionId];
   const isArchived = session.sessionId in archivedSessions;
-  const engineLabel = showEngineTag ? getSessionEngineLabel(session) : null;
   const [showTagInput, setShowTagInput] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -639,16 +624,6 @@ function SessionEntry({
             </div>
           )}
         </div>
-        {/* Which agent CLI owns this chat. Sized like the timestamp beside it —
-            the two engines are not interchangeable, but the list is scanned. */}
-        {engineLabel && (
-          <span
-            className="shrink-0 text-[10px] text-faint"
-            title={`${engineLabel} 会话`}
-          >
-            {engineLabel}
-          </span>
-        )}
         <div className="text-[10px] text-faint shrink-0">
           {formatRelativeTime(session.lastModified)}
         </div>

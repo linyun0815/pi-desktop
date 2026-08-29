@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import {
   useAppStore,
   countPromptsWaitingElsewhere,
   formatPromptsWaiting,
 } from "../store";
-import { agentEngineLabel } from "../../../shared/agent-engine-label";
 import { localizedStatus } from "../utils/ui-text";
 import { clsx } from "clsx";
 import {
@@ -23,11 +23,8 @@ import {
 export function StatusBar(): React.JSX.Element {
   const piStatus = useAppStore((state) => state.piStatus);
   const piPid = useAppStore((state) => state.piPid);
-  // Name the engine that is actually running; the two are not interchangeable
-  // and a user who switched to OMP should not be told Pi is running.
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? "Pi",
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const sessionStats = useAppStore((state) => state.sessionStats);
   const isStreaming = useAppStore((state) => state.isStreaming);
   const pendingSteering = useAppStore((state) => state.pendingSteering);

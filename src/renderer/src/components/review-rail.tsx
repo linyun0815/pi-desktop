@@ -7,10 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import { PermissionSelector } from "./permission-selector";
 import { formatUiError } from "../utils/ipc-error";
 import type { GitFileStatus } from "../../../shared/ipc-contracts";
@@ -28,9 +25,8 @@ export function ReviewRail(): React.JSX.Element | null {
   const pendingFollowUp = useAppStore((state) => state.pendingFollowUp);
   const setCurrentView = useAppStore((state) => state.setCurrentView);
   const isStreaming = useAppStore((state) => state.isStreaming);
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const activeWorkspace = useAppStore((state) => state.activeWorkspace);
   const messages = useAppStore((state) => state.messages);
   const [gitStatus, setGitStatus] = useState<Record<string, GitFileStatus>>({});

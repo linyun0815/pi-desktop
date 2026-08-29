@@ -36,6 +36,13 @@ export function usePiEvents(): void {
     const unsubscribeCounts = window.piDesktop.onPendingPrompts(
       handlePendingPromptCounts,
     );
+    // SDK auth flow prompts and progress lines (API-key login).
+    const unsubscribeAuthPrompt = window.piDesktop.auth.onAuthPrompt((event) => {
+      useAppStore.getState().setAuthPrompt(event);
+    });
+    const unsubscribeAuthNotify = window.piDesktop.auth.onAuthNotify((event) => {
+      useAppStore.getState().setAuthNotice(event.event.message);
+    });
     const unsubscribeActivity = window.piDesktop.onWorkspaceActivity(
       handleWorkspaceActivity,
     );
@@ -114,6 +121,8 @@ export function usePiEvents(): void {
     return () => {
       unsubscribeEvent();
       unsubscribeCounts();
+      unsubscribeAuthPrompt();
+      unsubscribeAuthNotify();
       unsubscribeActivity();
       unsubscribeSessionRuntime();
       unsubscribeActivate();
@@ -618,18 +627,6 @@ export function useInitialize(): void {
       } else {
         useAppStore.getState().setCurrentView("chat");
       }
-
-      // The status bar is on screen before any agent starts, and the engine is
-      // only carried on status payloads. Ask once at boot, or the bar reads
-      // "Pi stopped" for a user whose configured engine is OMP. Only the
-      // engine is adopted: the status itself is owned by the lifecycle
-      // actions, which may already be starting a session by now.
-      void window.piDesktop.pi
-        .getStatus()
-        .then((status) => {
-          if (status.engine) useAppStore.setState({ piEngine: status.engine });
-        })
-        .catch(() => undefined);
 
       // Background: session list, tags, notes, models, updates.
       void refreshSessionList();

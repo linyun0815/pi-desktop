@@ -1,20 +1,24 @@
 import { BrowserWindow } from 'electron'
-import { PiRpcManager } from '../pi-rpc-manager'
+import { PiSdkManager } from '../pi-sdk-manager'
 import { WorkspaceManager } from '../workspace-manager'
 import { SessionTagManager } from '../session-tags'
 import { ArchivedSessionsManager } from '../archived-sessions'
 import { TerminalService } from '../terminal-service'
 import { NotesManager } from '../notes-manager'
+import { EmbeddedPiAdminManager } from '../embedded-pi-admin'
+import { IPC_CHANNELS } from '../../shared/ipc-contracts'
 
 export interface IpcContext {
   workspaceManager: WorkspaceManager
   broadcast(channel: string, data: unknown): void
-  getActivePi(): PiRpcManager
+  getActivePi(): PiSdkManager
   approvedAttachmentPaths: Set<string>
   tagManager: SessionTagManager
   archivedSessions: ArchivedSessionsManager
   notesManager: NotesManager
   terminalService: TerminalService
+  /** Lazy admin helper: SDK auth + package management, never sessions. */
+  adminManager: EmbeddedPiAdminManager
 }
 
 export function createIpcContext(workspaceManager: WorkspaceManager): IpcContext {
@@ -28,8 +32,8 @@ export function createIpcContext(workspaceManager: WorkspaceManager): IpcContext
   // renderer cannot ask it to read arbitrary files by path.
   const approvedAttachmentPaths = new Set<string>()
 
-  // Helper: get Pi manager for active workspace
-  function getActivePi(): PiRpcManager {
+  // Helper: get the active workspace's embedded runtime manager
+  function getActivePi(): PiSdkManager {
     const pi = workspaceManager.getActivePiManager()
     if (!pi) throw new Error('No active workspace or Pi not running')
     return pi
@@ -54,5 +58,10 @@ export function createIpcContext(workspaceManager: WorkspaceManager): IpcContext
     archivedSessions,
     notesManager,
     terminalService,
+    adminManager: new EmbeddedPiAdminManager({
+      onAuthPrompt: (loginId, prompt) => broadcast(IPC_CHANNELS.EVENT_AUTH_PROMPT, { loginId, prompt }),
+      onAuthNotify: (loginId, event) => broadcast(IPC_CHANNELS.EVENT_AUTH_NOTIFY, { loginId, event }),
+      cwd: () => workspaceManager.getActiveWorkspace()?.path ?? process.env.HOME ?? process.cwd(),
+    }),
   }
 }

@@ -1,4 +1,5 @@
 import { dialog, shell, app } from "electron";
+import { getEmbeddedPiSdkVersion } from "../pi-sdk-manager";
 import type {
   ActivityStatsResult,
   OpenDialogOptions,
@@ -122,7 +123,7 @@ export function registerSystemHandlers(ctx: IpcContext): void {
   );
 
   ipcMain.handle(IPC_CHANNELS.SYSTEM_GET_VERSION, async () => {
-    return app.getVersion();
+    return { app: app.getVersion(), piSdk: getEmbeddedPiSdkVersion() };
   });
 
   ipcMain.handle(

@@ -12,7 +12,15 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/index.ts')
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // The embedded Pi SDK helper. Built next to the main entry so
+          // utilityProcess.fork can load it from out/main at runtime.
+          'embedded-pi-worker': resolve(__dirname, 'src/main/embedded-pi-worker.ts')
+        },
+        output: {
+          // Stable names so PiSdkManager's path resolution never guesses.
+          entryFileNames: '[name].js',
+          chunkFileNames: '[name]-[hash].js'
         }
       }
     }

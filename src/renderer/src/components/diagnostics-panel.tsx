@@ -12,11 +12,7 @@ import type {
   AppLogEntry,
   DiagnosticsReport,
 } from "../../../shared/ipc-contracts";
-import { useAppStore } from "../store";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+
 import { formatRelativeTime } from "../utils/format-relative-time";
 import { formatUiError, localizeIpcErrorMessage } from "../utils/ipc-error";
 import { CopyButton } from "./copy-button";
@@ -46,11 +42,6 @@ export function DiagnosticsPanel(): React.JSX.Element {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The report describes whichever CLI resolved, so labelling it "Pi version"
-  // while OMP is configured reports the wrong program's version number.
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
-  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -122,45 +113,52 @@ export function DiagnosticsPanel(): React.JSX.Element {
               <DiagRow label="平台" value={report.app.platform} />
             </DiagSection>
 
-            <DiagSection title={`${engineLabel} 可执行文件`}>
-              {report.piBinary.failureReason && (
-                <div className="mb-2 whitespace-pre-wrap rounded-md border border-border bg-error-bg px-3 py-2 text-xs text-error">
-                  {report.piBinary.failureReason}
-                </div>
-              )}
-              {report.piBinary.rejectedOverride && (
-                <div className="mb-2 rounded-md border border-border bg-warning-bg px-3 py-2 text-xs text-warning">
-                  已忽略配置的路径（不存在）：{report.piBinary.rejectedOverride}
+            <DiagSection title="内嵌 Pi 运行时">
+              {!report.piRuntime.nodeSatisfied && (
+                <div className="mb-2 rounded-md border border-border bg-error-bg px-3 py-2 text-xs text-error">
+                  Electron 内置 Node {report.piRuntime.nodeVersion} 低于内嵌
+                  SDK 要求的 {report.piRuntime.nodeRequired}，请升级应用。
                 </div>
               )}
               <DiagRow
-                label="找到可执行文件"
-                value={report.piBinary.found ? "是" : "否"}
-                tone={report.piBinary.found ? "ok" : "fail"}
+                label="SDK 版本"
+                value={report.piRuntime.sdkVersion}
+                tone={report.piRuntime.sdkVersion !== "unknown" ? "ok" : "warn"}
               />
+              <DiagRow label="协议版本" value={String(report.piRuntime.protocolVersion)} />
+              <DiagRow label="Helper 入口" value={report.piRuntime.workerPath} mono />
               <DiagRow
-                label={`${engineLabel} 版本`}
-                value={report.piVersion ?? "未知"}
-                tone={report.piVersion ? "plain" : "warn"}
+                label="内置 Node"
+                value={report.piRuntime.nodeVersion}
+                tone={report.piRuntime.nodeSatisfied ? "ok" : "fail"}
               />
-              <DiagRow label="脚本" value={report.piBinary.script} mono />
-              <DiagRow label="解析来源" value={report.piBinary.source} />
-              {report.piBinary.useNode && (
-                <DiagRow
-                  label="Node 可执行文件"
-                  value={report.piBinary.nodeBinary}
-                  mono
-                  tone={report.piBinary.nodeFound ? "plain" : "fail"}
-                />
+            </DiagSection>
+
+            <DiagSection title="活动 Helper">
+              {report.helpers.length === 0 ? (
+                <p className="text-xs text-dim">当前没有运行的会话 helper。</p>
+              ) : (
+                report.helpers.map((helper) => (
+                  <div key={helper.runtimeId} className="flex items-center gap-2 py-1 text-xs">
+                    <StatusGlyph
+                      tone={
+                        helper.status === "running"
+                          ? "ok"
+                          : helper.status === "error"
+                            ? "fail"
+                            : "warn"
+                      }
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono text-faint" title={helper.sessionPath ?? undefined}>
+                      {helper.sessionPath ?? helper.runtimeId}
+                    </span>
+                    <span className="shrink-0 text-secondary">
+                      {helper.status}
+                      {helper.activity ? ` · ${helper.activity}` : ""}
+                    </span>
+                  </div>
+                ))
               )}
-              <DiagRow
-                label="需要 Shell"
-                value={report.piBinary.needsShell ? "是" : "否"}
-              />
-              <DiagRow
-                label="已搜索 PATH 条目"
-                value={String(report.piBinary.pathEntryCount)}
-              />
             </DiagSection>
 
             <DiagSection title="工作区">

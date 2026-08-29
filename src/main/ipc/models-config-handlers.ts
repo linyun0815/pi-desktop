@@ -7,11 +7,12 @@ import { IPC_CHANNELS } from "../../shared/ipc-contracts";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
-import { getOmpAgentDir, getPiAgentDir } from "../pi-paths";
-import { getPiCli } from "../pi-rpc-manager";
+import { getPiAgentDir } from "../pi-paths";
+import { appLog } from "../app-log";
+import type { IpcContext } from "./context";
 
 function modelsConfigPaths(): { dir: string; file: string } {
-  const root = getPiCli().kind === "omp" ? getOmpAgentDir() : getPiAgentDir();
+  const root = getPiAgentDir();
   return { dir: root, file: join(root, "models.json") };
 }
 
@@ -50,7 +51,7 @@ export async function readModelsConfigFile(): Promise<ModelsReadResult> {
   }
 }
 
-export function registerModelsConfigHandlers(): void {
+export function registerModelsConfigHandlers(ctx: IpcContext): void {
   ipcMain.handle(
     IPC_CHANNELS.MODELS_READ,
     async (): Promise<ModelsReadResult> => {
@@ -78,13 +79,23 @@ export function registerModelsConfigHandlers(): void {
       try {
         if (!existsSync(dir)) await mkdir(dir, { recursive: true });
         await writeFile(file, JSON.stringify(config, null, 2) + "\n", "utf-8");
-        return { success: true };
       } catch (err) {
         return {
           success: false,
           error: err instanceof Error ? err.message : String(err),
         };
       }
+      // Idle helpers pick up the new models.json immediately; a helper that is
+      // mid-turn defers to its next start so saving never interrupts work.
+      for (const runtime of ctx.workspaceManager.getSessionRuntimes()) {
+        if (runtime.activity === "working" || runtime.activity === "needs-approval") continue;
+        const manager = ctx.workspaceManager.getSessionRuntimeManager(runtime.runtimeId);
+        if (!manager || manager.getStatus().status !== "running") continue;
+        await manager.reloadModelConfig().catch((err) => {
+          appLog.warn("models", `reloadModelConfig failed for runtime ${runtime.runtimeId}`, err);
+        });
+      }
+      return { success: true };
     },
   );
 }

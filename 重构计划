@@ -1,0 +1,82 @@
+# 内嵌 Pi SDK 实施计划
+
+## 结论
+可以实现。最终发行版将固定携带 `@earendil-works/pi-coding-agent@0.84.4`，通过 Electron 自带的 Node 运行时执行 Pi SDK；普通用户不需要单独安装 Pi，也不需要下载系统 Node。Pi 仍以独立的每会话 helper 进程运行，但不再启动 Pi CLI，也不再使用 JSONL RPC。
+
+普通对话、会话读写、工具执行、模型请求和已安装扩展不依赖系统 Node。Pi 包的显式 npm/git 安装或更新仍依赖用户机器上的 `npm`/`git`，失败时只影响包管理功能，不影响基本聊天能力。
+
+## 已锁定的产品决策
+
+- 第一期只内嵌 Pi，不再提供 OMP 运行入口、外部 Pi 可执行文件选择或系统 Node 回退。
+- 每个活动会话由一个 `utilityProcess.fork()` helper 承载 Pi SDK；不把第三方扩展直接放进 Electron 主进程。
+- 保留完整的全局/项目扩展、技能、提示模板、主题和 Pi 包兼容性；扩展在 helper 中拥有当前用户账户的本机权限，产品文案和信任流程必须明确这一点。
+- 首次认证只提供 SDK 的 `api_key` 流程，不调用 OAuth 或订阅登录流程。
+- 旧 `~/.omp` 会话、配置和文件不删除，也不迁移、不展示；只继续使用 `~/.pi/agent` 下的 Pi 数据。
+- 旧工作区信任记录升级后视为过期。用户下次打开相关工作区时重新确认；确认后同一个统一信任开关同时授权项目 Pi 资源、权限规则允许项和交互式 HTML 预览。
+- 保留 Electron `event:pi` 等 renderer-facing IPC 通道和标准化事件形状，尽量不改动聊天渲染逻辑；内部 `PiRpcManager`/RPC 命名改为 SDK runtime 命名。
+- 内嵌运行时使用 `~/.pi/agent`（继续支持 `PI_CODING_AGENT_DIR`）及其默认 sessions 目录。renderer 不再传递任意 CLI 参数或 `--session-dir`，避免绕过会话路径授权；这是 alpha 阶段允许的破坏性收敛。
+
+## 运行时与协议
+
+1. 新增 `PiSdkManager`，替换 `PiRpcManager`。它管理一个 utility process、启动/停止/崩溃状态、请求相关性、超时、helper PID 和事件订阅。
+2. 新增版本化的 `src/shared/embedded-agent-protocol.ts`，定义 parent → helper 的初始化、提示、steer/follow-up、abort、模型、思考级别、会话、压缩、bash、包管理和关闭消息，以及 helper → parent 的 response、event、UI request、ready 和诊断消息。所有消息都做结构校验，只允许 structured-clone 可传输的数据。
+3. 新增 `src/main/embedded-pi-worker.ts`。helper 设置自己的 `cwd`、`PI_CODING_AGENT=true`、`AI_AGENT=pi`，通过 `process.parentPort` 收发消息，动态加载 ESM Pi 包，并创建 `ModelRuntime`、`SettingsManager`、`DefaultResourceLoader`、`SessionManager` 和 `AgentSessionRuntime`。
+4. helper 使用 `AgentSessionRuntime` 管理 new/resume/switch/fork/clone，切换后重新绑定扩展、UI bridge 和事件订阅。父进程收到新的 session file/session id 后更新 workspace runtime 映射，继续禁止两个 helper 写同一个 JSONL。
+5. 初始化目标映射为：新会话使用 `SessionManager.create`，恢复使用 `SessionManager.open`，继续上次会话使用 `continueRecent`，跨项目 fork 使用 `forkFrom`，无持久化运行使用 `inMemory`。
+6. SDK 的 `message_update` 由 helper 转换成现有 renderer 需要的无 `partial` 事件；`message_start/end`、tool execution、turn、agent、queue、compaction、retry 和 session-info 事件保持现有语义。超大事件继续受现有输出截断和大小上限保护。
+7. 停止先发送有序 shutdown，等待 `session.abort()`、`runtime.dispose()` 和扩展清理；超时后由 main 使用 utility PID 做跨平台进程树清理。保留最多 6 个活动会话的 LRU 限制，并确保 helper 崩溃不会拖垮 Electron 主进程。
+8. extension UI bridge 继续把 select/confirm/input/editor 请求送到现有对话路由器。路由器泛化为 `PiSdkManager`，保留后台会话排队、原始请求归属、超时清理和活动工作区过滤逻辑。
+
+## 依赖、打包与资源
+
+- 在 `package.json`/lockfile 中精确加入 `@earendil-works/pi-coding-agent: 0.84.4`，并将源码构建 Node 下限提升到 `>=22.19.0`；CI 改用满足该下限的 Node 版本。
+- 在 `electron.vite.config.ts` 增加 worker 入口，确保 `out/main/embedded-pi-worker.js` 和主入口一起产出；Pi ESM 包保持 externalized，原样作为 production dependency 由 electron-builder 收入应用，而不是被 Vite 压进主 bundle。
+- 当前 Electron 43 作为基线，增加构建门禁读取 Electron 内置 `process.versions.node`；若低于 `22.19.0`，构建直接失败并强制升级 Electron，不允许在发行版中回退到系统 Node。
+- 在 electron-builder 配置中显式覆盖 Pi 依赖的 `.node`/平台 DLL/可选原生模块，验证 `@mariozechner/clipboard`、Pi TUI 原生文件和 Photon WASM 在 asar/asar.unpacked 中均可加载；保留 `npmRebuild: false`，避免无必要地重编译 `node-pty` 或 Pi 的预构建模块。
+- 增加 `scripts/verify-embedded-pi.mjs` 和打包 smoke 测试：检查精确 Pi 版本、worker、dist 资源、HTML export 模板、WASM 和平台原生文件，并在没有系统 `pi`/`node` PATH 的环境中启动一个最小 SDK 会话。
+- 增加第三方许可证/版权清单生成步骤，至少包含 Pi、Pi 子包、Photon、clipboard 及其随应用分发的运行依赖；随发行包提供，不把用户安装的第三方 Pi 包混入应用许可清单。
+
+## Main/IPC 迁移
+
+- `workspace-manager.ts`、`ipc/context.ts`、`extension-ui-ipc.ts`、`pi-event-router.ts` 和 `workspace-activity-wiring.ts` 改用 `PiSdkManager`，保持工作区活动、通知、后台会话、关闭和运行时预算行为。
+- `pi-handlers.ts`、`model-handlers.ts`、`session-handlers.ts`、`workflow-handlers.ts` 改为调用 manager 的类型化 SDK 方法；保留 renderer 现有 response envelope，删除 `get_state/get_messages` 等 JSONL 解析路径。
+- 删除 `pi-binary-resolution.ts`、外部 Pi/OMP 检测和 `run-pi-cli.ts` 的主流程依赖；`PI_DETECT_INSTALLATIONS`、Pi executable/engine 设置和 OMP 特有 RPC 分支一并移除。
+- `models-config-handlers.ts` 永远读写 Pi 的 `models.json`；写入后让空闲 helper 重新加载，正在执行 turn 的 helper 延迟到下一次 runtime reload/restart，避免保存模型配置中断用户工作。
+- `skills-mcp-handlers.ts` 只读取 Pi 资源路径，并通过当前 manager 暴露的 SDK command catalog；`workflow-handlers.ts` 只检查 Pi 的扩展命令。
+- 新增一个懒加载的 `EmbeddedPiAdminManager`，在独立 utility helper 中执行 API-key 登录、凭据状态、`DefaultPackageManager` 的 install/remove/update 和资源刷新，不把扩展代码加载进 main。
+- 包资源解析在没有 npm 时临时让 Pi package resolver 进入离线/跳过缺失安装路径：已存在的全局/项目资源照常加载，缺失资源记录诊断。显式安装/更新若找不到 npm 或 git，返回“可选包管理功能需要对应工具”的本地化错误。
+
+## 认证与工作区信任
+
+- 新增类型化 `AUTH_LIST_PROVIDERS`、`AUTH_LOGIN`、`AUTH_LOGOUT` IPC，以及 `EVENT_AUTH_PROMPT`/`EVENT_AUTH_NOTIFY`。
+- Settings 增加提供商凭据区：只列出 API-key 能力和无敏感信息的配置状态；login 调用 `ModelRuntime.login(providerId, "api_key", interaction)`，logout 调用对应 SDK 方法。
+- auth interaction 的 secret/text/select 提示使用独立安全模态框；密钥只在 renderer 临时内存、main 到 helper 的一次消息和 Pi 的 `auth.json` 中出现，不写入 app log、诊断报告、普通设置或模型列表。
+- `trusted-workspaces.json` 升级为带版本的对象。旧数组中的路径放入 `pendingReconfirmation`，不直接放入 `trusted`；统一 trust/revoke 操作使用原子写入并保留路径规范化。
+- 新增工作区信任状态 IPC 和 renderer 状态；启动 helper 时 main 传入 `projectTrusted`，并让 Pi `ResourceLoader` 的 trust callback 使用该值，避免 Pi 自己再弹一套不一致的 trust prompt。
+- 未确认/不信任时，项目 `.pi/settings.json`、项目扩展、项目包和项目技能不加载；现有 workspace deny 规则仍可收紧权限，allow 规则继续失效，HTML preview 继续静态模式。确认后重启该工作区所有 live helper，使三类能力同时生效。
+- 全局扩展继续按 Pi 规则加载；界面和文档明确“扩展可执行任意本机代码”，工作区信任不是 OS sandbox。
+
+## Renderer、Council 与文档
+
+- Settings 删除 Pi/OMP 安装选择、路径选择和 rescan，改为显示内嵌 Pi 版本、helper 状态和可选包管理状态；移除 renderer 中的 OMP 标签、混合引擎判断、`piEngine` 状态和安装失败文案。
+- 保留现有聊天事件处理、模型选择、思考级别、压缩、会话列表、通知和扩展权限对话；只补充 auth dialog、trust re-confirm dialog 和 helper/package 诊断字段。
+- Council 中 Pi 始终 `found: true`；Pi consultant 和 arbiter 使用短生命周期的只读 SDK task helper，`tools` 仅允许 `read/grep/find/ls`，无 session 持久化、无 bash/edit/write。Claude/Codex 仍按现有外部 CLI 检测和只读参数运行。
+- Pi consultant/arbiter 的 timeout 通过 SDK abort 加 utility 进程强制清理实现；顾问计划继续以 untrusted-data block 传给 arbiter，只有用户批准的共识计划进入可写会话。
+- 更新 `README.md`、`AGENTS.md`、`bin/pi-desktop.js`、`install.sh`、CI 文档和 `MEMORY.md`：发行版不需要安装 Pi/Node；源码构建需要 Node 22.19+；Git Bash/git 等工具仍按平台需要；npm/git 仅是可选 Pi 包管理依赖；Pi 版本由桌面应用更新而不是 `pi update` 更新。
+
+## 测试与验收
+
+- 新增协议校验、请求相关性、超时、helper 崩溃、优雅关闭、进程树清理和 SDK event-to-renderer event 映射单元测试。
+- 更新 workspace/runtime、活动通知、extension UI router、session fork/clone、模型和 workflow 测试，覆盖多个并发 helper 及同一 session file 的互斥。
+- 增加 SDK fixture 测试：无系统 Node/Pi 时可创建并运行 in-memory session；有旧 Pi JSONL 时可恢复、命名、压缩、导出 HTML；OMP JSONL 不会出现在列表中且磁盘文件不被改写。
+- 增加扩展测试：global/project extension 加载、trust 前后资源差异、权限 allow/deny、并发 confirm 排队、扩展异常只杀 helper 不杀主应用。
+- 增加 auth 测试：API-key login/logout、secret 不进入日志、取消不会写文件、多个 helper 看到新凭据；增加无 npm 时包操作的可选失败和已有包继续加载测试。
+- 在 Linux、Windows、macOS CI 打包后检查 worker 和 Pi runtime 资源，并运行最小 packaged smoke；测试环境明确移除 `pi`/`node` 的外部 PATH 入口。
+- 交付前运行 `npx tsx --test`（含 `src`、`resources`、脚本测试）、`npm run typecheck`、`npm run lint`、`npm run build`，并完成至少一个真实安装包的启动、API-key 配置、首次工作区信任、工具审批、会话重启和后台会话场景。
+
+## 默认与兼容说明
+
+- 精确固定 Pi `0.84.4`，后续 Pi 升级必须同步跑版本/Node/资源/协议回归，而不是使用浮动 semver。
+- 现有 Pi 的 `auth.json`、`models.json`、`settings.json`、sessions、全局包和工作区文件原地复用；旧 app settings 中的 `piExecutablePath`、`piEngine`、`defaultArgs` 读取时忽略，首次保存时清理。
+- 用户仍可安装外部 Pi/OMP，但新桌面端不会调用或扫描它们；旧 OMP 数据只保留在磁盘上。
+- Electron helper 不是安全沙箱：它提供崩溃隔离和独立 cwd/环境，不改变 Pi 工具和扩展拥有的操作系统权限。

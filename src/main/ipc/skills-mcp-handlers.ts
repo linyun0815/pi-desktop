@@ -4,8 +4,7 @@ import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import type { IpcContext } from "./context";
-import { getOmpAgentDir, getPiAgentDir } from "../pi-paths";
-import { getPiCli } from "../pi-rpc-manager";
+import { getPiAgentDir } from "../pi-paths";
 
 export function registerSkillsMcpHandlers(ctx: IpcContext): void {
   const { workspaceManager } = ctx;
@@ -22,16 +21,10 @@ export function registerSkillsMcpHandlers(ctx: IpcContext): void {
     const pi = workspaceManager.getActivePiManager();
     if (!pi || pi.getStatus().status !== "running") return [];
     try {
-      const command =
-        pi.getEngineKind() === "omp"
-          ? "get_available_commands"
-          : "get_commands";
-      const response = (await pi.sendCommand({ type: command })) as {
-        success?: boolean;
-        data?: { commands?: unknown[] };
-      } | null;
-      if (response?.success && response.data?.commands) {
-        return response.data.commands;
+      const response = await pi.listCommands();
+      if (response.success && response.data) {
+        const commands = (response.data as { commands?: unknown[] }).commands;
+        return Array.isArray(commands) ? commands : [];
       }
       return [];
     } catch {
@@ -59,10 +52,9 @@ async function listSkills(cwd: string): Promise<InstalledSkill[]> {
   const skills: InstalledSkill[] = [];
   const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
 
-  // Global skills
+  // Global skills (Pi's own tree plus the shared ~/.agents convention)
   const globalPaths = [
     join(getPiAgentDir(), "skills"),
-    join(getOmpAgentDir(), "skills"),
     join(homeDir, ".agents", "skills"),
   ];
 
@@ -73,7 +65,6 @@ async function listSkills(cwd: string): Promise<InstalledSkill[]> {
   // Project skills
   const projectPaths = [
     join(cwd, ".pi", "skills"),
-    join(cwd, ".omp", "skills"),
     join(cwd, ".agents", "skills"),
   ];
 
@@ -180,34 +171,13 @@ interface McpServerInfo {
 async function listMcpServers(wsPath?: string): Promise<McpServerInfo[]> {
   const servers: McpServerInfo[] = [];
   const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  const omp = getPiCli().kind === "omp";
-  const globalSettingsPaths = omp
-    ? [
-        join(getOmpAgentDir(), "mcp.json"),
-        join(getOmpAgentDir(), ".mcp.json"),
-        join(getPiAgentDir(), "settings.json"),
-      ]
-    : [
-        join(getPiAgentDir(), "settings.json"),
-        join(getOmpAgentDir(), "mcp.json"),
-        join(getOmpAgentDir(), ".mcp.json"),
-      ];
+  const globalSettingsPaths = [join(getPiAgentDir(), "settings.json")];
   for (const settingsPath of globalSettingsPaths) {
     await collectMcpServers(settingsPath, servers, "global");
   }
 
   if (wsPath) {
-    const projectSettingsPaths = omp
-      ? [
-          join(wsPath, ".omp", "mcp.json"),
-          join(wsPath, ".omp", ".mcp.json"),
-          join(wsPath, ".pi", "settings.json"),
-        ]
-      : [
-          join(wsPath, ".pi", "settings.json"),
-          join(wsPath, ".omp", "mcp.json"),
-          join(wsPath, ".omp", ".mcp.json"),
-        ];
+    const projectSettingsPaths = [join(wsPath, ".pi", "settings.json")];
     for (const settingsPath of projectSettingsPaths) {
       await collectMcpServers(settingsPath, servers, "project");
     }

@@ -54,13 +54,22 @@ export default tseslint.config(
   // CommonJS Node scripts: CLI launcher and install hooks. `require()` is the
   // correct module syntax here, so the TS-oriented rule is disabled.
   {
-    files: ['bin/**/*.js', 'scripts/**/*.js'],
+    files: ['bin/**/*.js', 'scripts/**/*.js', 'scripts/**/*.mjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: { ...globals.node },
     },
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  // ESM Node scripts (verify/generate tooling) keep node globals with real
+  // module semantics.
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { ...globals.node },
     },
   },
 )

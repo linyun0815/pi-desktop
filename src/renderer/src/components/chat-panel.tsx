@@ -1,5 +1,5 @@
 import { useAppStore } from "../store";
-import { agentEngineLabel } from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import { ChatInput } from "./chat-input";
 import { ChatProjectPicker } from "./chat-project-picker";
 import { CouncilPanels } from "./council-panels";
@@ -68,9 +68,8 @@ export function ChatPanel(): React.JSX.Element {
   const streamingThinking = useAppStore((state) => state.streamingThinking);
   const streamingToolCalls = useAppStore((state) => state.streamingToolCalls);
   const piStatus = useAppStore((state) => state.piStatus);
-  const engineLabel = useAppStore(
-    (state) => agentEngineLabel(state.piEngine) ?? "Pi",
-  );
+  // The desktop embeds Pi; the label is a constant.
+  const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
   const terminalOpen = useAppStore((state) => state.terminalOpen);
   const reviewOpen = useAppStore((state) => state.reviewOpen);
   const sidebarOpen = useAppStore((state) => state.sidebarOpen);

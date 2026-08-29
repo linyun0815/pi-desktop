@@ -1,5 +1,5 @@
 import { secureIpcMain as ipcMain } from "./validation";
-import { IPC_CHANNELS } from "../../shared/ipc-contracts";
+import { IPC_CHANNELS, type PromptImage } from "../../shared/ipc-contracts";
 import { access } from "fs/promises";
 import { isString, isObject } from "./validation";
 import {
@@ -9,15 +9,11 @@ import {
 } from "./pi-start-options";
 import { loadAppSettings } from "./settings";
 import type { IpcContext } from "./context";
-import {
-  detectPiInstallations,
-  getConfiguredEngineKind,
-} from "../pi-rpc-manager";
 
 export function registerPiHandlers(ctx: IpcContext): void {
   const { workspaceManager, getActivePi } = ctx;
 
-  // ─── Pi Process Lifecycle ───────────────────────────────────────────────
+  // ─── Pi Runtime Lifecycle ───────────────────────────────────────────────
 
   ipcMain.handle(IPC_CHANNELS.PI_START, async (_event, options?: unknown) => {
     const opts = validateStartOptions(options);
@@ -72,10 +68,7 @@ export function registerPiHandlers(ctx: IpcContext): void {
 
     // Restart the runtime, not just its process: the runtime owns the session
     // binding, and restartSessionRuntime re-applies it. Starting the manager
-    // directly would drop it — `--continue` picks whatever file on disk is
-    // newest (possibly another live runtime's), and without the resume setting
-    // Pi opens a blank session, either way leaving the tab lying about which
-    // session it shows.
+    // directly would drop the binding and open a blank session.
     const runtimeId = workspaceManager.runtimeIdFor(pi);
     const runtime = runtimeId
       ? workspaceManager.getSessionRuntime(runtimeId)
@@ -98,29 +91,10 @@ export function registerPiHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(IPC_CHANNELS.PI_STATUS, async () => {
     const pi = workspaceManager.getActivePiManager();
-    // No manager yet is the normal state at launch. Report the engine that
-    // would start anyway, or the status bar names Pi until something runs.
-    if (!pi)
-      return {
-        status: "stopped",
-        pid: null,
-        error: null,
-        engine: getConfiguredEngineKind(),
-      };
+    // No manager yet is the normal state at launch.
+    if (!pi) return { status: "stopped", pid: null, error: null };
     return pi.getStatus();
   });
-
-  // `{ force: true }` is what the Rescan button must send: without it the
-  // handler may answer from a cache up to 30 s old and an engine installed
-  // moments ago never appears.
-  ipcMain.handle(
-    IPC_CHANNELS.PI_DETECT_INSTALLATIONS,
-    async (_event, options?: unknown) => ({
-      installations: detectPiInstallations(
-        isObject(options) && options.force === true,
-      ),
-    }),
-  );
 
   // ─── Pi Commands ────────────────────────────────────────────────────────
 
@@ -128,13 +102,20 @@ export function registerPiHandlers(ctx: IpcContext): void {
     IPC_CHANNELS.PI_PROMPT,
     async (_event, message: unknown, options?: unknown) => {
       if (!isString(message)) throw new Error("message must be a string");
-      const cmd: Record<string, unknown> = { type: "prompt", message };
+      const opts: {
+        images?: PromptImage[];
+        streamingBehavior?: "steer" | "followUp";
+      } = {};
       if (isObject(options)) {
-        if (options.images) cmd.images = options.images;
-        if (options.streamingBehavior)
-          cmd.streamingBehavior = options.streamingBehavior;
+        if (Array.isArray(options.images)) opts.images = options.images as PromptImage[];
+        if (
+          options.streamingBehavior === "steer" ||
+          options.streamingBehavior === "followUp"
+        ) {
+          opts.streamingBehavior = options.streamingBehavior;
+        }
       }
-      return getActivePi().sendCommand(cmd);
+      return getActivePi().prompt(message, opts);
     },
   );
 
@@ -142,30 +123,28 @@ export function registerPiHandlers(ctx: IpcContext): void {
     IPC_CHANNELS.PI_STEER,
     async (_event, message: unknown, images?: unknown) => {
       if (!isString(message)) throw new Error("message must be a string");
-      const cmd: Record<string, unknown> = { type: "steer", message };
-      if (Array.isArray(images) && images.length > 0) cmd.images = images;
-      return getActivePi().sendCommand(cmd);
+      const promptImages = Array.isArray(images) && images.length > 0
+        ? (images as PromptImage[])
+        : undefined;
+      return getActivePi().steer(message, promptImages);
     },
   );
 
-  ipcMain.handle(
-    IPC_CHANNELS.PI_FOLLOW_UP,
-    async (_event, message: unknown) => {
-      if (!isString(message)) throw new Error("message must be a string");
-      return getActivePi().sendCommand({ type: "follow_up", message });
-    },
-  );
+  ipcMain.handle(IPC_CHANNELS.PI_FOLLOW_UP, async (_event, message: unknown) => {
+    if (!isString(message)) throw new Error("message must be a string");
+    return getActivePi().followUp(message);
+  });
 
   ipcMain.handle(IPC_CHANNELS.PI_ABORT, async () => {
-    return getActivePi().sendCommand({ type: "abort" });
+    return getActivePi().abort();
   });
 
   ipcMain.handle(IPC_CHANNELS.PI_BASH, async (_event, command: unknown) => {
     if (!isString(command)) throw new Error("command must be a string");
-    return getActivePi().sendCommand({ type: "bash", command });
+    return getActivePi().bash(command);
   });
 
   ipcMain.handle(IPC_CHANNELS.PI_ABORT_BASH, async () => {
-    return getActivePi().sendCommand({ type: "abort_bash" });
+    return getActivePi().abortBash();
   });
 }

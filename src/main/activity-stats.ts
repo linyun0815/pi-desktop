@@ -9,7 +9,7 @@ import {
   existsSync,
 } from "fs";
 import { dirname, join, resolve } from "path";
-import { getOmpAgentDir, getPiAgentDir, getSessionRoots } from "./pi-paths";
+import { getPiAgentDir, getSessionRoots } from "./pi-paths";
 import { getGuiDataPath } from "./app-data-paths";
 import type {
   ActivityStatsResult,
@@ -193,7 +193,7 @@ export class ActivityStatsStore {
     return [
       ...new Set([
         join(getPiAgentDir(), "models.json"),
-        join(getOmpAgentDir(), "models.json"),
+        join(getPiAgentDir(), "models.json"),
       ]),
     ];
   }

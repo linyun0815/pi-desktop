@@ -2,21 +2,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'path'
 import {
-  engineForBoundSession,
-  engineForSessionPath,
   getPiAgentDir,
-  getOmpAgentDir,
   getSessionsRoot,
-  getOmpSessionsRoot,
   getSessionRoots,
   isWithinSessionRoots,
 } from './pi-paths'
 
 /**
- * Each engine keeps its sessions in its own store, so a session started under
- * OMP never reaches Pi's tree. The index has to read both or those sessions
- * are invisible in the Sessions tab, and it has to remember which store a row
- * came from or the app cannot relaunch the engine that owns it.
+ * The embedded runtime uses only Pi's own session store (`~/.pi/agent/sessions`,
+ * or PI_CODING_AGENT_DIR). Legacy OMP trees stay on disk untouched but are
+ * neither listed nor authorized — resuming or deleting out of them is refused
+ * exactly like any path outside the store.
  */
 
 function withEnv(vars: Record<string, string | undefined>, run: () => void): void {
@@ -36,111 +32,37 @@ function withEnv(vars: Record<string, string | undefined>, run: () => void): voi
   }
 }
 
-test('agent directory helpers honor engine-specific overrides', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: '/custom/pi', OMP_CODING_AGENT_DIR: '/custom/omp' }, () => {
+test('the agent directory honors PI_CODING_AGENT_DIR', () => {
+  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: '/custom/pi' }, () => {
     assert.equal(getPiAgentDir(), '/custom/pi')
-    assert.equal(getOmpAgentDir(), '/custom/omp')
     assert.equal(getSessionsRoot(), join('/custom/pi', 'sessions'))
-    assert.equal(getOmpSessionsRoot(), join('/custom/omp', 'sessions'))
+    assert.deepEqual(getSessionRoots(), [join('/custom/pi', 'sessions')])
   })
 })
 
-
-test('the two engines resolve to different session stores', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
+test('the default store lives under ~/.pi/agent', () => {
+  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined }, () => {
     assert.equal(getSessionsRoot(), join('/home/tester', '.pi', 'agent', 'sessions'))
-    assert.equal(getOmpSessionsRoot(), join('/home/tester', '.omp', 'agent', 'sessions'))
-    assert.notEqual(getSessionsRoot(), getOmpSessionsRoot())
+    assert.deepEqual(getSessionRoots(), [getSessionsRoot()])
   })
 })
 
-test('the index reads both stores, Pi first', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    assert.deepEqual(getSessionRoots(), [getSessionsRoot(), getOmpSessionsRoot()])
+test('a session inside the store is authorized', () => {
+  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined }, () => {
+    assert.equal(isWithinSessionRoots(join(getSessionsRoot(), '--home-tester--', 'a.jsonl')), true)
+    // Nested subagent transcripts share the parent's authorization.
+    assert.equal(isWithinSessionRoots(join(getSessionsRoot(), '--p--', 'run', 'c.jsonl')), true)
   })
 })
 
-test('one directory shared by both engines is only listed once', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: '/shared/agent', OMP_CODING_AGENT_DIR: '/shared/agent' }, () => {
-    assert.deepEqual(getSessionRoots(), [join('/shared/agent', 'sessions')])
-  })
-})
-
-test('a session file is owned by the engine whose store holds it', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    assert.equal(engineForSessionPath(join(getSessionsRoot(), '--home-tester--', 'a.jsonl')), 'pi')
-    assert.equal(engineForSessionPath(join(getOmpSessionsRoot(), '--home-tester--', 'b.jsonl')), 'omp')
-    // Nested subagent transcripts belong to the same engine as their parent.
-    assert.equal(engineForSessionPath(join(getOmpSessionsRoot(), '--p--', 'run', 'c.jsonl')), 'omp')
-  })
-})
-
-test('a session outside every store has no owning engine', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    assert.equal(engineForSessionPath('/tmp/loose.jsonl'), null)
-    assert.equal(engineForSessionPath(join('/home/tester', '.pi', 'agent', 'auth.json')), null)
-  })
-})
-
-test('one directory shared by both engines is owned by Pi', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: '/shared/agent', OMP_CODING_AGENT_DIR: '/shared/agent' }, () => {
-    // Same tie-break as getSessionRoots, so the row's engine matches the root
-    // the index listed it from.
-    assert.equal(engineForSessionPath(join('/shared/agent', 'sessions', '--p--', 'a.jsonl')), 'pi')
-  })
-})
-
-test('a session created by OMP is authorized, not just a Pi one', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    const piSession = join(getSessionsRoot(), '--home-tester--', 'a.jsonl')
-    const ompSession = join(getOmpSessionsRoot(), '--home-tester--', 'b.jsonl')
-
-    assert.equal(isWithinSessionRoots(piSession), true)
-    // This is the regression: before the index read both stores, resuming or
-    // deleting an OMP session was refused as being outside the session root.
-    assert.equal(isWithinSessionRoots(ompSession), true)
-  })
-})
-
-test('a path outside every store is still refused', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
+test('a path outside the store is refused', () => {
+  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined }, () => {
     assert.equal(isWithinSessionRoots('/etc/passwd'), false)
     assert.equal(isWithinSessionRoots(join('/home/tester', '.pi', 'agent', 'auth.json')), false)
     // A sibling directory whose name merely starts with the root must not pass.
-    assert.equal(isWithinSessionRoots(join('/home/tester', '.omp', 'agent', 'sessions-backup', 'x.jsonl')), false)
-  })
-})
-
-/**
- * The runtime launcher and the permission-mode options both have to name the
- * same engine for one start. If they disagree, a start runs OMP while being
- * given Pi's plan-mode tool names, so plan mode loses the tools it should allow.
- */
-
-test('a start bound to an OMP session belongs to OMP', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    const ompSession = join(getOmpSessionsRoot(), '--p--', 'a.jsonl')
-    assert.equal(engineForBoundSession({ sessionPath: ompSession }), 'omp')
-    assert.equal(engineForBoundSession({ sessionPath: join(getSessionsRoot(), '--p--', 'a.jsonl') }), 'pi')
-  })
-})
-
-test('a fork reads its source, so the source engine wins over the new file', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    assert.equal(
-      engineForBoundSession({
-        sessionPath: join(getSessionsRoot(), '--p--', 'new.jsonl'),
-        forkSessionPath: join(getOmpSessionsRoot(), '--p--', 'source.jsonl'),
-      }),
-      'omp'
-    )
-  })
-})
-
-test('a start with no session has no owning engine', () => {
-  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {
-    // A brand-new session is free to use whichever engine is configured.
-    assert.equal(engineForBoundSession({}), null)
-    assert.equal(engineForBoundSession({ sessionPath: '/tmp/loose.jsonl' }), null)
+    assert.equal(isWithinSessionRoots(join('/home/tester', '.pi', 'agent', 'sessions-backup', 'x.jsonl')), false)
+    // A legacy OMP session is NOT authorized: the embedded runtime never
+    // opens or migrates the old tree, whatever still sits on disk.
+    assert.equal(isWithinSessionRoots(join('/home/tester', '.omp', 'agent', 'sessions', '--p--', 'b.jsonl')), false)
   })
 })

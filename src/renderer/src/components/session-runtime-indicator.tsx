@@ -1,9 +1,6 @@
 import { AlertCircle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { SessionRuntimeInfo } from "../../../shared/ipc-contracts";
-import {
-  DEFAULT_AGENT_ENGINE_LABEL,
-  agentEngineLabel,
-} from "../../../shared/agent-engine-label";
+import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 
 export function SessionRuntimeIndicator({
   runtime,
@@ -15,9 +12,7 @@ export function SessionRuntimeIndicator({
   const needsApproval = runtime.activity === "needs-approval";
   const completed = runtime.activity === "completed";
   const failed = runtime.activity === "failed" || runtime.status === "error";
-  // Each runtime names its own engine: the sidebar can show a Pi session and an
-  // OMP session at once, so a screen reader must not call both of them Pi.
-  const agent = agentEngineLabel(runtime.engine) ?? DEFAULT_AGENT_ENGINE_LABEL;
+  const agent = DEFAULT_AGENT_ENGINE_LABEL;
 
   if (working) {
     return (

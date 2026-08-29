@@ -1,4 +1,4 @@
-import type { PiRpcManager } from "./pi-rpc-manager";
+import type { PiSdkManager } from "./pi-sdk-manager";
 import type {
   PendingPromptCounts,
   PiExtensionUiRequest,
@@ -7,7 +7,7 @@ import type {
 } from "../shared/ipc-contracts";
 
 /**
- * Routes Pi events from every workspace's PiRpcManager to the renderer.
+ * Routes Pi events from every workspace's PiSdkManager to the renderer.
  *
  * Non-dialog events keep the deliberate active-workspace-only filter: the
  * renderer's piStatus/stream state is a single global view and must track the
@@ -40,13 +40,13 @@ interface QueuedPrompt {
 }
 
 interface PromptOrigin {
-  manager: PiRpcManager;
+  manager: PiSdkManager;
   originalId: string;
 }
 
 export interface PiEventRouterDeps {
-  getActiveManager(): PiRpcManager | null;
-  workspaceIdFor(manager: PiRpcManager): string | null;
+  getActiveManager(): PiSdkManager | null;
+  workspaceIdFor(manager: PiSdkManager): string | null;
   /** Forward one Pi event to the renderer (EVENT_PI). */
   broadcastEvent(event: PiRpcEvent): void;
   /** Push a fresh pending-prompt snapshot to the renderer (EVENT_PENDING_PROMPTS). */
@@ -56,7 +56,7 @@ export interface PiEventRouterDeps {
 
 export interface PiEventRouter {
   /** Wire a manager's event/status-change/exit emissions into the router. Idempotent. */
-  attachManager(manager: PiRpcManager): void;
+  attachManager(manager: PiSdkManager): void;
   /** Answer an extension-UI request, routing to its origin manager. */
   respond(id: string, response: Record<string, unknown>): void;
   /** (Re-)deliver the workspace's held dialog; no-op unless it is active now. */
@@ -71,16 +71,16 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
   // Blocking dialogs are owned by a Pi process, not a project. Multiple live
   // session runtimes may share one workspace cwd, so workspace-keyed queues
   // would deliver one session's prompt to another.
-  const queues = new Map<PiRpcManager, QueuedPrompt[]>();
+  const queues = new Map<PiSdkManager, QueuedPrompt[]>();
   // The one dialog currently owned by the renderer slot per Pi process. The
   // full payload is retained until answered or evicted so flush can replay it.
-  const delivered = new Map<PiRpcManager, QueuedPrompt>();
+  const delivered = new Map<PiSdkManager, QueuedPrompt>();
   // Every blocking dialog's asking manager and original Pi id, until answered
   // or evicted. The renderer-facing id is normally the original id; a suffix is
   // added only when two live runtimes happen to reuse the same id.
   const origins = new Map<string, PromptOrigin>();
   let nextDisambiguator = 1;
-  const attached = new WeakSet<PiRpcManager>();
+  const attached = new WeakSet<PiSdkManager>();
 
   const isBlockingDialog = (event: PiRpcEvent): event is PiExtensionUiRequest =>
     event.type === "extension_ui_request" &&
@@ -135,7 +135,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
   };
 
   /** An empty queue is deleted rather than stored, so counts omit zero entries. */
-  const storeQueue = (manager: PiRpcManager, entries: QueuedPrompt[]): void => {
+  const storeQueue = (manager: PiSdkManager, entries: QueuedPrompt[]): void => {
     if (entries.length === 0) queues.delete(manager);
     else queues.set(manager, entries);
   };
@@ -176,7 +176,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
    * Pop the workspace's queue into its empty delivered slot and broadcast,
    * reaping expired entries on the way. Returns whether state changed.
    */
-  const deliverNext = (manager: PiRpcManager): boolean => {
+  const deliverNext = (manager: PiSdkManager): boolean => {
     if (delivered.has(manager)) return false;
     const entries = queues.get(manager);
     if (entries === undefined) return false;
@@ -190,14 +190,14 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
     return live.length !== entries.length;
   };
 
-  const enqueue = (manager: PiRpcManager, entry: QueuedPrompt): void => {
+  const enqueue = (manager: PiSdkManager, entry: QueuedPrompt): void => {
     const queue = queues.get(manager);
     if (queue) queue.push(entry);
     else queues.set(manager, [entry]);
   };
 
   const handleBlockingDialog = (
-    manager: PiRpcManager,
+    manager: PiSdkManager,
     event: PiExtensionUiRequest,
   ): void => {
     const entry = track(event);
@@ -228,7 +228,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
   };
 
   const handleManagerEvent = (
-    manager: PiRpcManager,
+    manager: PiSdkManager,
     event: PiRpcEvent,
   ): void => {
     if (isBlockingDialog(event)) {
@@ -245,7 +245,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
    * pending requests: purge every prompt it originated so none can ghost-
    * deliver against a process that will never consume the answer.
    */
-  const evictManager = (manager: PiRpcManager): void => {
+  const evictManager = (manager: PiSdkManager): void => {
     const ownedIds = new Set<string>();
     for (const [id, origin] of origins) {
       if (origin.manager === manager) ownedIds.add(id);
@@ -262,7 +262,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
     emitCounts();
   };
 
-  const attachManager = (manager: PiRpcManager): void => {
+  const attachManager = (manager: PiSdkManager): void => {
     // WorkspaceManager's wiredPairs already dedups its listener attachment;
     // this guard makes the router safe against any second wiring path.
     if (attached.has(manager)) return;
@@ -284,7 +284,7 @@ export function createPiEventRouter(deps: PiEventRouterDeps): PiEventRouter {
     origins.delete(id);
     // Purge the id everywhere FIRST — regardless of a routing hit — so an
     // answered request can never linger as a queued or delivered ghost.
-    let purgedManager: PiRpcManager | null = null;
+    let purgedManager: PiSdkManager | null = null;
     for (const [manager, entries] of queues) {
       const kept = entries.filter((entry) => entry.event.id !== id);
       if (kept.length === entries.length) continue;

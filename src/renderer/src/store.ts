@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { applyTheme, setUserThemes, watchSystemTheme } from "./utils/theme";
 import { formatUiError } from "./utils/ipc-error";
+import type { AuthPromptPayload } from "../../shared/embedded-agent-protocol";
 import { buildPlanningPrompt } from "./utils/planning-prompt";
 import {
   parseAgentMessage,
@@ -31,7 +32,6 @@ import {
 import type {
   PiRpcEvent,
   PiStatus,
-  AgentEngineKind,
   PiProcessStatus,
   SessionState,
   SessionStats,
@@ -245,8 +245,6 @@ interface AppState {
   piStatus: PiProcessStatus;
   piPid: number | null;
   piError: string | null;
-  /** Which engine the live process actually is, so the UI names it correctly. */
-  piEngine: AgentEngineKind;
 
   // Session
   sessionState: SessionState | null;
@@ -345,6 +343,10 @@ interface AppState {
   // Fire-and-forget notify toast. Its own slot so a toast can never clobber
   // an unanswered blocking dialog (and vice versa); both can be on screen.
   extensionNotify: PiExtensionUiRequest | null;
+  // Active SDK auth prompt (API-key login). Answered via the auth bridge.
+  authPrompt: { loginId: string; prompt: AuthPromptPayload } | null;
+  // Last non-interactive auth progress/info line, for status display.
+  authNotice: string | null;
   // Blocking prompts held by main per workspace id (zero entries omitted).
   pendingPromptCounts: PendingPromptCounts;
   // Per-workspace background activity derived in main (idle entries omitted).
@@ -547,6 +549,8 @@ interface AppActions {
   // Extension UI
   respondExtensionUi: (id: string, response: Record<string, unknown>) => void;
   dismissExtensionUi: () => void;
+  setAuthPrompt: (prompt: { loginId: string; prompt: AuthPromptPayload } | null) => void;
+  setAuthNotice: (message: string | null) => void;
   dismissExtensionNotify: () => void;
 
   // App confirmation dialog (promise-based; resolves true on confirm)
@@ -907,7 +911,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   piStatus: "stopped",
   piPid: null,
   piError: null,
-  piEngine: "pi",
 
   sessionState: null,
   sessionStats: null,
@@ -947,6 +950,8 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
 
   extensionUiRequest: null,
   extensionNotify: null,
+  authPrompt: null,
+  authNotice: null,
   pendingPromptCounts: {},
   workspaceActivity: {},
   workflowRuns: [],
@@ -1008,7 +1013,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         piStatus: status.status,
         piPid: status.pid,
         piError: status.error,
-        piEngine: status.engine ?? "pi",
       });
 
       if (status.status === "running") {
@@ -1029,7 +1033,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         piStatus: status.status,
         piPid: status.pid,
         piError: status.error,
-        piEngine: status.engine ?? "pi",
       });
     } catch (err) {
       set({ piStatus: "error", piError: formatUiError(err) });
@@ -1045,7 +1048,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         piStatus: status.status,
         piPid: status.pid,
         piError: status.error,
-        piEngine: status.engine ?? "pi",
       });
 
       // Re-read session state after a restart so the status bar's model label
@@ -1445,7 +1447,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
               piStatus:
                 runtime.status === "stopped" ? "starting" : runtime.status,
               piPid: runtime.pid,
-              piEngine: runtime.engine ?? "pi",
               piError: runtime.error,
             }
           : {}),
@@ -1518,7 +1519,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         activeSessionRuntimeId: runtime.runtimeId,
         piStatus: runtime.status === "stopped" ? "starting" : runtime.status,
         piPid: runtime.pid,
-        piEngine: runtime.engine ?? "pi",
         piError: runtime.error,
       });
       if (reusedWorktree) {
@@ -1692,7 +1692,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
                 activeSessionRuntimeId: runtime.runtimeId,
                 piStatus: runtime.status,
                 piPid: runtime.pid,
-                piEngine: runtime.engine ?? "pi",
                 piError: runtime.error,
               }
             : {}),
@@ -2406,27 +2405,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         });
         break;
 
-      case "available_commands_update":
-        set({
-          commands: normalizePiCommands(
-            (event as { commands?: unknown }).commands,
-          ),
-        });
-        break;
-
-      case "command_output": {
-        const text = (event as { text?: unknown }).text;
-        if (typeof text === "string" && text.trim()) {
-          get().addMessage({
-            id: generateId(),
-            role: "system",
-            content: text,
-            timestamp: Date.now(),
-          });
-        }
-        break;
-      }
-
       case "prompt_result":
         if (!(event as { agentInvoked?: unknown }).agentInvoked) {
           set({ isStreaming: false });
@@ -2485,30 +2463,21 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         break;
       }
 
-      case "session_info_changed":
-      case "session_info_update": {
+      case "session_info_changed": {
         // Live title update (auto-title extension, /name, or our rename).
         // Apply the new name directly to the active session's state + list row
         // so both the Current Session panel and its Recent row update instantly,
         // with no file read or RPC round-trip.
         const info = event as {
           name?: unknown;
-          title?: unknown;
-          sessionId?: unknown;
         };
-        const rawName = info.name ?? info.title;
+        const rawName = info.name;
         const newName = (typeof rawName === "string" && rawName.trim()) || null;
         set((state) => {
           const activeFile = state.sessionState?.sessionFile ?? null;
           return {
             sessionState: state.sessionState
-              ? {
-                  ...state.sessionState,
-                  sessionName: newName,
-                  ...(typeof info.sessionId === "string"
-                    ? { sessionId: info.sessionId }
-                    : {}),
-                }
+              ? { ...state.sessionState, sessionName: newName }
               : state.sessionState,
             sessionList: activeFile
               ? state.sessionList.map((s) =>
@@ -2528,7 +2497,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
           piStatus: statusEvent.status,
           piPid: statusEvent.pid,
           piError: statusEvent.error,
-          ...(statusEvent.engine ? { piEngine: statusEvent.engine } : {}),
         });
         if (statusEvent.status === "running") {
           get().loadCommands();
@@ -2566,6 +2534,14 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       }
       set({ extensionUiRequest: null });
     }
+  },
+
+  setAuthPrompt: (prompt) => {
+    set({ authPrompt: prompt });
+  },
+
+  setAuthNotice: (message) => {
+    set({ authNotice: message });
   },
 
   dismissExtensionNotify: () => {
@@ -2646,7 +2622,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         ? {
             piStatus: runtime.status,
             piPid: runtime.pid,
-            piEngine: runtime.engine ?? "pi",
             piError: runtime.error,
             ...(runtime.status === "error" || runtime.status === "stopped"
               ? { sessionLoading: false }
@@ -2709,6 +2684,25 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
 
   maybeWarnWorkspacePermissionRules: async () => {
     try {
+      // Unified trust re-confirmation: records carried over from the legacy
+      // trust list are pending, not trusted. Re-confirming here authorizes
+      // project Pi resources, permission-rule allows, and interactive HTML
+      // preview in one switch (helpers restart main-side on either choice).
+      const trustStatus = await window.piDesktop.workspace.trustStatus();
+      if (trustStatus.pendingReconfirmation && trustStatus.workspacePath) {
+        const reconfirm = await get().requestConfirm({
+          title: "重新信任此工作区？",
+          message:
+            "应用升级后，此工作区需要重新确认信任。确认后，其项目 Pi 资源（.pi 设置、扩展、技能）、权限规则允许项和交互式 HTML 预览将同时生效；扩展可执行任意本机代码，请只信任来源可靠的工作区。",
+          confirmLabel: "信任工作区",
+          cancelLabel: "保持不信任",
+        });
+        const activeWs = get().activeWorkspace;
+        if (activeWs) {
+          await window.piDesktop.workspace.setTrust(activeWs.id, reconfirm);
+        }
+      }
+
       const status = await window.piDesktop.permissionRules.workspaceStatus();
       if (
         !status.hasWorkspaceRules ||
@@ -3007,7 +3001,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         piStatus: status.status,
         piPid: status.pid,
         piError: status.error,
-        piEngine: status.engine ?? "pi",
       });
       // Session list refresh only — navigation never spawns a process.
       scheduleSessionListRefresh(get);
@@ -3884,12 +3877,9 @@ function handleToolEnd(event: PiToolExecutionEndEvent, set: ZustandSet): void {
 /**
  * Tool names that spawn a subagent.
  *
- * Pi delegates through the `pi-subagents` package, which registers `subagent`
- * and `subagent_wait`. OMP has delegation built in and groups it under
- * coordination as `task` (delegate one) and `hub` (fan out to several); `hub`
- * is what a plain "use the reviewer agent" request actually calls, observed on
- * the wire. The strip keyed off the Pi names only, so under OMP it stayed
- * empty while five reviewers really were running.
+ * Pi delegates through the `pi-subagents` package (`subagent`, `subagent_wait`).
+ * The coordination names `task`/`hub` are kept for sessions whose history
+ * predates the embedded runtime and still replays OMP-era tool calls.
  */
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "subagent",
@@ -3905,10 +3895,9 @@ export function isSubagentTool(toolName: string): boolean {
 /**
  * First non-empty string among `keys`, or null.
  *
- * The two engines label a spawn with different argument names and OMP's schema
- * is not published anywhere this code can read, so the label is resolved by
- * trying the plausible keys rather than hard-coding one engine's spelling. A
- * miss costs a generic label, never a missing progress row.
+ * Spawn argument names have varied across agent versions, so the label is
+ * resolved by trying the plausible keys rather than hard-coding one spelling.
+ * A miss costs a generic label, never a missing progress row.
  */
 function firstStringArg(
   args: Record<string, unknown> | undefined,
@@ -3922,7 +3911,7 @@ function firstStringArg(
   return null;
 }
 
-/** Which agent a spawn targets. Both engines have used `agent`; the rest are fallbacks. */
+/** Which agent a spawn targets; the rest are fallbacks after `agent`. */
 export function subagentAgentName(
   args: Record<string, unknown> | undefined,
 ): string {

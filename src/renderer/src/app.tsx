@@ -14,10 +14,8 @@ import { MissionControl } from "./components/mission-control";
 import { TaskLauncher } from "./components/task-launcher";
 import { NotePicker } from "./components/note-picker";
 import { CommandPalette } from "./components/command-palette";
-import {
-    ExtensionUiDialog,
-    AppConfirmDialog,
-} from "./components/extension-ui-dialog";
+import { ExtensionUiDialog, AppConfirmDialog } from "./components/extension-ui-dialog";
+import { AuthPromptModal } from "./components/auth-prompt-modal";
 import { ReviewRail } from "./components/review-rail";
 import { WorkspaceTabs } from "./components/workspace-tabs";
 import { WorkflowNavigator } from "./components/workflow-navigator";
@@ -226,6 +224,7 @@ export function App(): React.JSX.Element {
             {showChrome && <StatusBar />}
             {showChrome && !globalWorkflowOpen && <WorkflowNavigator />}
             <ExtensionUiDialog />
+            <AuthPromptModal />
             <AppConfirmDialog />
             <NotePicker />
             <TaskLauncher />

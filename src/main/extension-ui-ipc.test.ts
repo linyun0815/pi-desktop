@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { PiRpcManager } from './pi-rpc-manager'
+import { PiSdkManager } from './pi-sdk-manager'
 import {
   createExtensionUiRouter,
   wireExtensionUiIpc,
@@ -14,7 +14,7 @@ const WS_A = 'ws-a'
 const WS_B = 'ws-b'
 const REQUEST_ID = 'req-1'
 /** Status a manager that was never started reports. */
-const STOPPED_STATUS = { status: 'stopped', pid: null, error: null, engine: 'pi' }
+const STOPPED_STATUS = { status: 'stopped', pid: null, error: null }
 const PENDING_COUNTS: PendingPromptCounts = { [WS_A]: 2, [WS_B]: 1 }
 
 /** The four channels that answer a blocking extension-UI dialog. */
@@ -59,9 +59,9 @@ interface Harness {
   channels(): string[]
   routerCalls: RouterCall[]
   broadcasts: Broadcast[]
-  managerListeners: ((manager: PiRpcManager) => void)[]
+  managerListeners: ((manager: PiSdkManager) => void)[]
   activeListeners: (() => void)[]
-  setActivePi(manager: PiRpcManager | null): void
+  setActivePi(manager: PiSdkManager | null): void
 }
 
 /** Records every router call instead of running the real routing logic. */
@@ -83,9 +83,9 @@ function createHarness(): Harness {
   const handlers = new Map<string, (event: FakeInvokeEvent, ...args: unknown[]) => Promise<unknown>>()
   const routerCalls: RouterCall[] = []
   const broadcasts: Broadcast[] = []
-  const managerListeners: ((manager: PiRpcManager) => void)[] = []
+  const managerListeners: ((manager: PiSdkManager) => void)[] = []
   const activeListeners: (() => void)[] = []
-  let activePi: PiRpcManager | null = null
+  let activePi: PiSdkManager | null = null
 
   const workspace: ExtensionUiWorkspace = {
     getActivePiManager: () => activePi,
@@ -197,8 +197,8 @@ test('the pending-get channel returns the router counts', async () => {
 test('every Pi manager the workspace announces is attached to the router', () => {
   const h = createHarness()
   assert.equal(h.managerListeners.length, 1, 'the wiring must subscribe to new managers')
-  const first = new PiRpcManager()
-  const second = new PiRpcManager()
+  const first = new PiSdkManager()
+  const second = new PiSdkManager()
   for (const listener of h.managerListeners) {
     listener(first)
     listener(second)
@@ -211,7 +211,7 @@ test('every Pi manager the workspace announces is attached to the router', () =>
 
 test('an active-workspace change pushes the new workspace Pi status and refreshes counts', () => {
   const h = createHarness()
-  h.setActivePi(new PiRpcManager())
+  h.setActivePi(new PiSdkManager())
   for (const listener of h.activeListeners) listener()
   assert.deepEqual(h.broadcasts, [
     { channel: IPC_CHANNELS.EVENT_PI, data: { type: 'status_change', ...STOPPED_STATUS } },
@@ -231,7 +231,7 @@ test('an active-workspace change without a Pi manager still refreshes counts', (
 
 interface RouterHarness {
   broadcasts: Broadcast[]
-  managers: Map<string, PiRpcManager>
+  managers: Map<string, PiSdkManager>
   setActive(workspaceId: string | null): void
 }
 
@@ -242,7 +242,7 @@ interface RouterHarness {
  */
 function createRouterHarness(workspaceIds: string[]): RouterHarness {
   const broadcasts: Broadcast[] = []
-  const managers = new Map<string, PiRpcManager>()
+  const managers = new Map<string, PiSdkManager>()
   let active: string | null = workspaceIds[0] ?? null
 
   const workspace: ExtensionUiWorkspace = {
@@ -262,7 +262,7 @@ function createRouterHarness(workspaceIds: string[]): RouterHarness {
     broadcast: (channel, data) => broadcasts.push({ channel, data }),
   })
   for (const workspaceId of workspaceIds) {
-    const manager = new PiRpcManager()
+    const manager = new PiSdkManager()
     managers.set(workspaceId, manager)
     router.attachManager(manager)
   }
