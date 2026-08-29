@@ -1,25 +1,35 @@
-import { useState } from 'react'
-import { clsx } from 'clsx'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { useContextMenu, buildCodeBlockContextMenu, buildLinkContextMenu } from './context-menu'
-import { CopyButton } from './copy-button'
-import { LineNumberedCode } from './line-numbered-code'
-import { splitReadTruncationNote } from '../message-grouping'
-import { looksLikeFilePath, openFileFromChat } from './chat-file-link'
-import { ErrorBoundary } from './error-boundary'
-import { Code2, Eye } from 'lucide-react'
+import { useState } from "react";
+import { clsx } from "clsx";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  useContextMenu,
+  buildCodeBlockContextMenu,
+  buildLinkContextMenu,
+} from "./context-menu";
+import { CopyButton } from "./copy-button";
+import { LineNumberedCode } from "./line-numbered-code";
+import { splitReadTruncationNote } from "../message-grouping";
+import { looksLikeFilePath, openFileFromChat } from "./chat-file-link";
+import { ErrorBoundary } from "./error-boundary";
+import { Code2, Eye } from "lucide-react";
 
 interface MarkdownRendererProps {
-  content: string
+  content: string;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.Element {
-  const { show, ContextMenuComponent } = useContextMenu()
+export function MarkdownRenderer({
+  content,
+}: MarkdownRendererProps): React.JSX.Element {
+  const { show, ContextMenuComponent } = useContextMenu();
 
   return (
     <ErrorBoundary
-      fallback={<pre className="whitespace-pre-wrap break-words text-secondary">{content}</pre>}
+      fallback={
+        <pre className="whitespace-pre-wrap break-words text-secondary">
+          {content}
+        </pre>
+      }
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
@@ -30,14 +40,14 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
               {...props}
               href={href}
               onClick={(e) => {
-                e.preventDefault()
+                e.preventDefault();
                 if (href) {
-                  window.piDesktop.system.openExternal(href)
+                  window.piDesktop.system.openExternal(href);
                 }
               }}
               onContextMenu={(e) => {
                 if (href) {
-                  show(e, buildLinkContextMenu(href))
+                  show(e, buildLinkContextMenu(href));
                 }
               }}
               className="text-accent-fg hover:underline cursor-pointer"
@@ -48,15 +58,15 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
 
           // Code blocks — right-click to copy
           pre: (props) => {
-            const p = props as Record<string, unknown>
-            const children = p.children as React.ReactNode
-            const codeText = extractCodeText(children)
+            const p = props as Record<string, unknown>;
+            const children = p.children as React.ReactNode;
+            const codeText = extractCodeText(children);
 
             // A fenced block whose content is a complete SVG document renders as
             // an image (with a source toggle), regardless of the fence's language
             // tag — models emit SVG under ```svg / ```xml / ```html or untagged.
             if (isRenderableSvg(codeText)) {
-              return <SvgBlock raw={codeText.replace(/\n$/, '')} />
+              return <SvgBlock raw={codeText.replace(/\n$/, "")} />;
             }
 
             return (
@@ -64,42 +74,49 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
                 className="relative"
                 onContextMenu={(e) => {
                   if (codeText) {
-                    show(e, buildCodeBlockContextMenu(codeText))
+                    show(e, buildCodeBlockContextMenu(codeText));
                   }
                 }}
               >
                 {children}
-                <CopyButton text={codeText} className="absolute right-1.5 top-1.5" />
+                <CopyButton
+                  text={codeText}
+                  className="absolute right-1.5 top-1.5"
+                />
               </pre>
-            )
+            );
           },
 
           // Inline code — right-click to copy
           code: (props) => {
-            const p = props as Record<string, unknown>
-            const children = p.children as React.ReactNode
-            const className = p.className as string | undefined
+            const p = props as Record<string, unknown>;
+            const children = p.children as React.ReactNode;
+            const className = p.className as string | undefined;
 
             // Fenced code block: highlight with the same CodeMirror pipeline the
             // code editor uses. `language-xxx` class is added by mdast-util-to-hast
             // from the fence info string. Context menu is handled by the pre wrapper.
-            if (className?.includes('language-')) {
-              const lang = className.replace(/^.*language-/, '').split(/\s+/)[0]
-              const raw = extractCodeText(children).replace(/\n$/, '')
+            if (className?.includes("language-")) {
+              const lang = className
+                .replace(/^.*language-/, "")
+                .split(/\s+/)[0];
+              const raw = extractCodeText(children).replace(/\n$/, "");
               // Models often paste a truncated read verbatim; peel Pi's
               // "[N more lines in file…]" footer out of the fence so it renders as
               // a note rather than syntax-highlighted code. Line-numbered via the
               // same component as file-read tool results so both look identical.
-              const { code: codeBody, note } = splitReadTruncationNote(raw)
+              const { code: codeBody, note } = splitReadTruncationNote(raw);
               return (
                 <code className={className}>
                   <LineNumberedCode content={codeBody} lang={lang} />
-                  {note && <div className="mt-2 text-xs italic text-dim">{note}</div>}
+                  {note && (
+                    <div className="mt-2 text-xs italic text-dim">{note}</div>
+                  )}
                 </code>
-              )
+              );
             }
 
-            const inlineText = typeof children === 'string' ? children : ''
+            const inlineText = typeof children === "string" ? children : "";
 
             // Inline code that reads like a real filename opens in the editor;
             // everything else (keywords, function names, literals) copies on click.
@@ -108,31 +125,31 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
                 <code
                   className="chat-file-link"
                   onClick={() => {
-                    void openFileFromChat(inlineText)
+                    void openFileFromChat(inlineText);
                   }}
                   onContextMenu={(e) => {
-                    show(e, buildCodeBlockContextMenu(inlineText))
+                    show(e, buildCodeBlockContextMenu(inlineText));
                   }}
                 >
                   {children}
                 </code>
-              )
+              );
             }
 
             return (
               <code
                 onClick={() => {
-                  if (inlineText) navigator.clipboard.writeText(inlineText)
+                  if (inlineText) navigator.clipboard.writeText(inlineText);
                 }}
                 onContextMenu={(e) => {
                   if (inlineText) {
-                    show(e, buildCodeBlockContextMenu(inlineText))
+                    show(e, buildCodeBlockContextMenu(inlineText));
                   }
                 }}
               >
                 {children}
               </code>
-            )
+            );
           },
 
           // Tables
@@ -147,7 +164,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
       </ReactMarkdown>
       {ContextMenuComponent}
     </ErrorBoundary>
-  )
+  );
 }
 
 /**
@@ -156,8 +173,11 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps): React.JSX.
  * whether a fenced code block should render as an image.
  */
 function isRenderableSvg(text: string): boolean {
-  const t = text.trim()
-  return /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)?<svg[\s>]/i.test(t) && /<\/svg>\s*$/i.test(t)
+  const t = text.trim();
+  return (
+    /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)?<svg[\s>]/i.test(t) &&
+    /<\/svg>\s*$/i.test(t)
+  );
 }
 
 /**
@@ -167,8 +187,8 @@ function isRenderableSvg(text: string): boolean {
  * from model/tool output can't run code or phone home.
  */
 function SvgBlock({ raw }: { raw: string }): React.JSX.Element {
-  const [showSource, setShowSource] = useState(false)
-  const src = `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`
+  const [showSource, setShowSource] = useState(false);
+  const src = `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`;
 
   return (
     <div className="relative my-2 overflow-hidden rounded-lg border border-border bg-surface/50">
@@ -177,22 +197,26 @@ function SvgBlock({ raw }: { raw: string }): React.JSX.Element {
           <button
             onClick={() => setShowSource(true)}
             className={clsx(
-              'rounded p-1 transition-colors',
-              showSource ? 'bg-card text-primary' : 'text-dim hover:bg-surface-hover/50 hover:text-secondary'
+              "rounded p-1 transition-colors",
+              showSource
+                ? "bg-card text-primary"
+                : "text-dim hover:bg-surface-hover/50 hover:text-secondary",
             )}
-            title="View source"
-            aria-label="View source"
+            title="查看源代码"
+            aria-label="查看源代码"
           >
             <Code2 size={14} />
           </button>
           <button
             onClick={() => setShowSource(false)}
             className={clsx(
-              'rounded p-1 transition-colors',
-              !showSource ? 'bg-card text-primary' : 'text-dim hover:bg-surface-hover/50 hover:text-secondary'
+              "rounded p-1 transition-colors",
+              !showSource
+                ? "bg-card text-primary"
+                : "text-dim hover:bg-surface-hover/50 hover:text-secondary",
             )}
-            title="Render SVG"
-            aria-label="Render SVG"
+            title="渲染 SVG"
+            aria-label="渲染 SVG"
           >
             <Eye size={14} />
           </button>
@@ -210,26 +234,30 @@ function SvgBlock({ raw }: { raw: string }): React.JSX.Element {
         </pre>
       ) : (
         <div className="flex justify-center p-3">
-          <img src={src} alt="Rendered SVG" className="max-h-[480px] max-w-full" />
+          <img
+            src={src}
+            alt="已渲染的 SVG"
+            className="max-h-[480px] max-w-full"
+          />
         </div>
       )}
     </div>
-  )
+  );
 }
 
 /**
  * Extract plain text from code block children.
  */
 function extractCodeText(children: React.ReactNode): string {
-  if (typeof children === 'string') return children
+  if (typeof children === "string") return children;
   if (Array.isArray(children)) {
-    return children.map(extractCodeText).join('')
+    return children.map(extractCodeText).join("");
   }
-  if (children && typeof children === 'object') {
-    const el = children as { props?: { children?: unknown } }
+  if (children && typeof children === "object") {
+    const el = children as { props?: { children?: unknown } };
     if (el.props?.children) {
-      return extractCodeText(el.props.children as React.ReactNode)
+      return extractCodeText(el.props.children as React.ReactNode);
     }
   }
-  return ''
+  return "";
 }

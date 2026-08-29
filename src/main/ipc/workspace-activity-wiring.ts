@@ -1,26 +1,33 @@
-import { ipcMain, Notification, type BrowserWindow } from 'electron'
-import { IPC_CHANNELS } from '../../shared/ipc-contracts'
-import type { PiProcessStatus, WorkspaceActivationIntent } from '../../shared/ipc-contracts'
+import { Notification, type BrowserWindow } from "electron";
+import { secureIpcMain as ipcMain } from "./validation";
+import { IPC_CHANNELS } from "../../shared/ipc-contracts";
+import type {
+  PiProcessStatus,
+  WorkspaceActivationIntent,
+} from "../../shared/ipc-contracts";
 import {
   createWorkspaceActivityTracker,
   type WorkspaceActivityNotification,
   type WorkspaceActivityTracker,
-} from '../workspace-activity'
-import { shouldNotify } from '../notify-decision'
-import { appLog } from '../app-log'
-import { loadAppSettings } from './settings'
-import type { IpcContext } from './context'
+} from "../workspace-activity";
+import { shouldNotify } from "../notify-decision";
+import { appLog } from "../app-log";
+import { loadAppSettings } from "./settings";
+import type { IpcContext } from "./context";
 
-const NOTIFICATION_BODIES: Record<WorkspaceActivityNotification['kind'], string> = {
-  completed: 'Pi finished working.',
-  failed: 'Pi stopped with an error.',
-  'needs-approval': 'Pi is waiting for your approval.',
-}
+const NOTIFICATION_BODIES: Record<
+  WorkspaceActivityNotification["kind"],
+  string
+> = {
+  completed: "Pi 已完成工作。",
+  failed: "Pi 因错误停止。",
+  "needs-approval": "Pi 正在等待审批。",
+};
 
 export interface WindowControls {
-  getWindow(): BrowserWindow | null
+  getWindow(): BrowserWindow | null;
   /** Show the main window, creating it if it was fully closed (macOS). */
-  showWindow(): void
+  showWindow(): void;
 }
 
 /**
@@ -36,44 +43,44 @@ export function wireWorkspaceActivity(
   windowControls: WindowControls,
   iconPath: string,
 ): WorkspaceActivityTracker {
-  const { workspaceManager } = ctx
-  const { getWindow, showWindow } = windowControls
+  const { workspaceManager } = ctx;
+  const { getWindow, showWindow } = windowControls;
   // Activation intent from a notification clicked while no window existed;
   // the freshly created renderer pulls it once its subscriptions are live.
-  let pendingActivation: WorkspaceActivationIntent | null = null
+  let pendingActivation: WorkspaceActivationIntent | null = null;
 
   const showNotification = async (
     notification: WorkspaceActivityNotification,
   ): Promise<void> => {
-    const settings = await loadAppSettings(workspaceManager)
-    const window = getWindow()
+    const settings = await loadAppSettings(workspaceManager);
+    const window = getWindow();
     const permitted = shouldNotify({
       enabled: settings.desktopNotifications,
       windowFocused: window?.isFocused() ?? false,
       eventWorkspaceId: notification.workspaceId,
       activeWorkspaceId: workspaceManager.getActiveWorkspaceId(),
-    })
-    if (!permitted || !Notification.isSupported()) return
+    });
+    if (!permitted || !Notification.isSupported()) return;
 
     const workspace = workspaceManager
       .getWorkspaces()
-      .find((ws) => ws.id === notification.workspaceId)
-    if (!workspace) return
+      .find((ws) => ws.id === notification.workspaceId);
+    if (!workspace) return;
 
     const osNotification = new Notification({
       title: workspace.name,
       body: notification.sessionPath
-        ? `${NOTIFICATION_BODIES[notification.kind]} Click to open the finished session.`
+        ? `${NOTIFICATION_BODIES[notification.kind]} 点击打开会话。`
         : NOTIFICATION_BODIES[notification.kind],
       ...(iconPath ? { icon: iconPath } : {}),
-    })
-    osNotification.on('click', () => {
+    });
+    osNotification.on("click", () => {
       // The workspace can be removed between showing and clicking; a stale
       // click should just bring the app forward, not run confirm dialogs for
       // a doomed switch.
       const stillExists = workspaceManager
         .getWorkspaces()
-        .some((ws) => ws.id === notification.workspaceId)
+        .some((ws) => ws.id === notification.workspaceId);
       // Always stash AND broadcast: a webContents.send only lands if the
       // renderer's subscription is already live, which a click during boot,
       // reload, or with the window closed cannot guarantee. A renderer that
@@ -81,88 +88,100 @@ export function wireWorkspaceActivity(
       // missed it pulls the stash when its subscriptions come up.
       const intent: WorkspaceActivationIntent = {
         workspaceId: notification.workspaceId,
-        ...(notification.sessionPath ? { sessionPath: notification.sessionPath } : {}),
-        ...(notification.runtimeId ? { runtimeId: notification.runtimeId } : {}),
-      }
-      if (stillExists) pendingActivation = intent
-      const win = getWindow()
+        ...(notification.sessionPath
+          ? { sessionPath: notification.sessionPath }
+          : {}),
+        ...(notification.runtimeId
+          ? { runtimeId: notification.runtimeId }
+          : {}),
+      };
+      if (stillExists) pendingActivation = intent;
+      const win = getWindow();
       if (win) {
-        if (win.isMinimized()) win.restore()
-        win.show()
-        win.focus()
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
         // The renderer owns workspace activation (it runs the streaming and
         // dirty-editor confirms), so hand it the intent instead of switching
         // main-side and desyncing its store.
         if (stillExists) {
-          ctx.broadcast(IPC_CHANNELS.EVENT_ACTIVATE_WORKSPACE, intent)
+          ctx.broadcast(IPC_CHANNELS.EVENT_ACTIVATE_WORKSPACE, intent);
         }
       } else {
         // macOS: the window may be fully closed — recreate it; the fresh
         // renderer pulls the stashed intent once its subscriptions are live.
-        showWindow()
+        showWindow();
       }
-    })
-    osNotification.show()
-  }
+    });
+    osNotification.show();
+  };
 
   const tracker = createWorkspaceActivityTracker({
     getActiveWorkspaceId: () => workspaceManager.getActiveWorkspaceId(),
     now: () => Date.now(),
-    onChange: (map) => ctx.broadcast(IPC_CHANNELS.EVENT_WORKSPACE_ACTIVITY, map),
+    onChange: (map) =>
+      ctx.broadcast(IPC_CHANNELS.EVENT_WORKSPACE_ACTIVITY, map),
     onNotify: (notification) => {
       void showNotification(notification).catch((err) => {
-        appLog.warn('notifications', 'Failed to show desktop notification', err)
-      })
+        appLog.warn(
+          "notifications",
+          "Failed to show desktop notification",
+          err,
+        );
+      });
     },
-  })
+  });
 
   // Every manager (existing and future) feeds the tracker; the workspace id is
   // resolved at event time so pre-registration races cannot mislabel events.
   workspaceManager.onPiManager((manager) => {
-    const workspaceIdOf = (): string | null => workspaceManager.workspaceIdFor(manager)
+    const workspaceIdOf = (): string | null =>
+      workspaceManager.workspaceIdFor(manager);
     const sessionTarget = (): { runtimeId?: string; sessionPath?: string } => {
-      const sessionPath = workspaceManager.sessionPathFor(manager)
-      const runtimeId = workspaceManager.runtimeIdFor(manager)
+      const sessionPath = workspaceManager.sessionPathFor(manager);
+      const runtimeId = workspaceManager.runtimeIdFor(manager);
       return {
         ...(sessionPath ? { sessionPath } : {}),
         ...(runtimeId ? { runtimeId } : {}),
-      }
-    }
-    manager.on('agent_start', () => {
-      const id = workspaceIdOf()
-      if (id) tracker.handleAgentStart(id, sessionTarget())
-    })
-    manager.on('agent_end', () => {
-      const id = workspaceIdOf()
-      if (id) tracker.handleAgentEnd(id, sessionTarget())
-    })
-    manager.on('status-change', (status: PiProcessStatus) => {
-      const id = workspaceIdOf()
-      if (id) tracker.handleStatusChange(id, status, sessionTarget())
-    })
+      };
+    };
+    manager.on("agent_start", () => {
+      const id = workspaceIdOf();
+      if (id) tracker.handleAgentStart(id, sessionTarget());
+    });
+    manager.on("agent_end", () => {
+      const id = workspaceIdOf();
+      if (id) tracker.handleAgentEnd(id, sessionTarget());
+    });
+    manager.on("status-change", (status: PiProcessStatus) => {
+      const id = workspaceIdOf();
+      if (id) tracker.handleStatusChange(id, status, sessionTarget());
+    });
     // Only unexpected death emits 'exit' (deliberate stop() detaches
     // listeners first) — this is what distinguishes a crash from a stop.
-    manager.on('exit', () => {
-      const id = workspaceIdOf()
-      if (id) tracker.handleProcessExit(id, sessionTarget())
-    })
-  })
+    manager.on("exit", () => {
+      const id = workspaceIdOf();
+      if (id) tracker.handleProcessExit(id, sessionTarget());
+    });
+  });
 
   workspaceManager.onActiveWorkspaceChanged((workspaceId) => {
-    if (workspaceId) tracker.handleWorkspaceSeen(workspaceId)
-  })
+    if (workspaceId) tracker.handleWorkspaceSeen(workspaceId);
+  });
 
   workspaceManager.onWorkspaceRemoved((workspaceId) => {
-    tracker.handleWorkspaceRemoved(workspaceId)
-  })
+    tracker.handleWorkspaceRemoved(workspaceId);
+  });
 
-  ipcMain.handle(IPC_CHANNELS.WORKSPACE_ACTIVITY_GET, async () => tracker.getMap())
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_ACTIVITY_GET, async () =>
+    tracker.getMap(),
+  );
 
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_TAKE_PENDING_ACTIVATION, async () => {
-    const intent = pendingActivation
-    pendingActivation = null
-    return intent
-  })
+    const intent = pendingActivation;
+    pendingActivation = null;
+    return intent;
+  });
 
-  return tracker
+  return tracker;
 }

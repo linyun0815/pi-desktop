@@ -1,26 +1,45 @@
-import { Plus, Trash2, Upload, Download, Copy, ShieldCheck, ShieldAlert } from 'lucide-react'
-import type { PermissionRule, PermissionRuleAction, PermissionRulesScope } from '../../../shared/ipc-contracts'
-import { emptyRule } from './permission-rules-editor-helpers'
+import {
+  Plus,
+  Trash2,
+  Upload,
+  Download,
+  Copy,
+  ShieldCheck,
+  ShieldAlert,
+} from "lucide-react";
+import type {
+  PermissionRule,
+  PermissionRuleAction,
+  PermissionRulesScope,
+} from "../../../shared/ipc-contracts";
+import { emptyRule } from "./permission-rules-editor-helpers";
 
-const TOOL_SUGGESTIONS = ['*', 'bash', 'edit', 'write', 'read', 'grep'] as const
-const TOOL_DATALIST_ID = 'permission-rule-tool-suggestions'
+const TOOL_SUGGESTIONS = [
+  "*",
+  "bash",
+  "edit",
+  "write",
+  "read",
+  "grep",
+] as const;
+const TOOL_DATALIST_ID = "permission-rule-tool-suggestions";
 
 interface PermissionRulesEditorProps {
-  rules: PermissionRule[]
-  onChange: (rules: PermissionRule[]) => void
-  onImport: () => void
-  onExport: () => void
-  scope: PermissionRulesScope
-  workspaceExists: boolean
-  onCopyFromGlobal: () => void
-  onRemoveWorkspace: () => void
-  workspaceOverride: boolean
-  workspaceActive: boolean
-  workspaceTrusted: boolean
-  workspaceHasAllowRules: boolean
-  onSetWorkspaceTrust: (trusted: boolean) => void
-  loadError: string | null
-  actionError: string | null
+  rules: PermissionRule[];
+  onChange: (rules: PermissionRule[]) => void;
+  onImport: () => void;
+  onExport: () => void;
+  scope: PermissionRulesScope;
+  workspaceExists: boolean;
+  onCopyFromGlobal: () => void;
+  onRemoveWorkspace: () => void;
+  workspaceOverride: boolean;
+  workspaceActive: boolean;
+  workspaceTrusted: boolean;
+  workspaceHasAllowRules: boolean;
+  onSetWorkspaceTrust: (trusted: boolean) => void;
+  loadError: string | null;
+  actionError: string | null;
 }
 
 export function PermissionRulesEditor({
@@ -41,85 +60,87 @@ export function PermissionRulesEditor({
   actionError,
 }: PermissionRulesEditorProps): React.JSX.Element {
   const updateRule = (index: number, patch: Partial<PermissionRule>): void => {
-    onChange(rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)))
-  }
+    onChange(
+      rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)),
+    );
+  };
 
   const removeRule = (index: number): void => {
-    onChange(rules.filter((_, i) => i !== index))
-  }
+    onChange(rules.filter((_, i) => i !== index));
+  };
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs text-dim">
-          Deny always wins, then allow, then the mode above decides. Use * as a wildcard.
+          拒绝始终优先，其次是允许，最后由上面的模式决定。使用 * 表示通配符。
         </span>
         <div className="flex gap-1">
-          {scope === 'workspace' && (
+          {scope === "workspace" && (
             <button
               type="button"
               onClick={onCopyFromGlobal}
               className="flex items-center gap-1 rounded-md border border-border-strong px-2 py-1 text-xs text-primary transition-colors hover:border-border-strong-hover"
-              title="Copy the global rules list into this workspace (replaces the list below until you save)"
+              title="将全局规则列表复制到此工作区（保存前会替换下方列表）"
             >
-              <Copy size={12} /> Copy from global
+              <Copy size={12} /> 从全局复制
             </button>
           )}
           <button
             type="button"
             onClick={onImport}
             className="flex items-center gap-1 rounded-md border border-border-strong px-2 py-1 text-xs text-primary transition-colors hover:border-border-strong-hover"
-            title="Import rules from a JSON file (replaces the list below until you save)"
+            title="从 JSON 文件导入规则（保存前会替换下方列表）"
           >
-            <Upload size={12} /> Import
+            <Upload size={12} /> 导入
           </button>
           <button
             type="button"
             onClick={onExport}
             className="flex items-center gap-1 rounded-md border border-border-strong px-2 py-1 text-xs text-primary transition-colors hover:border-border-strong-hover"
-            title="Export the list below to a JSON file"
+            title="将下方列表导出为 JSON 文件"
           >
-            <Download size={12} /> Export
+            <Download size={12} /> 导出
           </button>
         </div>
       </div>
 
-      {scope === 'workspace' && workspaceActive && (
+      {scope === "workspace" && workspaceActive && (
         <div className="flex flex-col gap-2">
           {workspaceTrusted ? (
             <div className="flex items-center justify-between gap-2 rounded-md border border-border-strong bg-surface px-2 py-1.5 text-xs text-dim">
               <span className="flex items-center gap-1.5 text-primary">
                 <ShieldCheck size={13} className="shrink-0" />
-                Trusted — this workspace&apos;s allow rules apply and HTML previews run scripts.
+                已信任，此工作区的允许规则会生效，HTML 预览可以运行脚本。
               </span>
               <button
                 type="button"
                 onClick={() => onSetWorkspaceTrust(false)}
                 className="shrink-0 rounded-md border border-border-strong px-2 py-1 text-primary transition-colors hover:border-border-strong-hover"
               >
-                Revoke trust
+                撤销信任
               </button>
             </div>
           ) : (
             <div
               className={`flex items-start justify-between gap-2 rounded-md border px-2 py-1.5 text-xs ${
                 workspaceHasAllowRules
-                  ? 'border-warning-bg bg-warning-bg text-warning'
-                  : 'border-border-strong bg-surface text-dim'
+                  ? "border-warning-bg bg-warning-bg text-warning"
+                  : "border-border-strong bg-surface text-dim"
               }`}
             >
               <span className="flex items-start gap-1.5">
                 <ShieldAlert size={13} className="mt-0.5 shrink-0" />
                 {workspaceHasAllowRules
-                  ? "This workspace's allow rules are inactive and HTML previews are static until you trust it. Its deny rules still apply. Trust only workspaces from a source you trust."
-                  : 'HTML previews for this workspace are static (scripts disabled). Trust it to enable interactive previews and any allow rules.'}
+                  ? "此工作区的允许规则未生效，HTML 预览在信任前为静态模式。拒绝规则仍然生效。请只信任来源可靠的工作区。"
+                  : "此工作区的 HTML 预览为静态模式（脚本已禁用）。信任后可启用交互式预览和允许规则。"}
               </span>
               <button
                 type="button"
                 onClick={() => onSetWorkspaceTrust(true)}
                 className="shrink-0 rounded-md border border-border-strong bg-surface px-2 py-1 text-primary transition-colors hover:border-border-strong-hover"
               >
-                Trust workspace
+                信任工作区
               </button>
             </div>
           )}
@@ -128,19 +149,17 @@ export function PermissionRulesEditor({
               type="button"
               onClick={onRemoveWorkspace}
               className="flex items-center gap-1 self-start rounded-md border border-error-bg px-2 py-1 text-xs text-error transition-colors hover:bg-error-bg"
-              title="Delete this workspace's .pi-desktop/permission-rules.json; global rules apply again"
+              title="删除此工作区的 .pi-desktop/permission-rules.json，恢复使用全局规则"
             >
-              <Trash2 size={12} /> Remove workspace rules
+              <Trash2 size={12} /> 移除工作区规则
             </button>
           )}
         </div>
       )}
 
-      {workspaceOverride && scope === 'global' && (
+      {workspaceOverride && scope === "global" && (
         <p className="rounded-md border border-border-strong bg-surface px-2 py-1.5 text-xs text-dim">
-          This workspace has its own rules file (.pi-desktop/permission-rules.json). Its deny rules
-          apply on top of these global rules; its allow rules apply only if you trust the workspace
-          — see the This workspace tab.
+          此工作区有自己的规则文件（.pi-desktop/permission-rules.json）。其拒绝规则会叠加在全局规则之上；允许规则仅在信任此工作区后生效，详见“当前工作区”标签页。
         </p>
       )}
 
@@ -149,7 +168,7 @@ export function PermissionRulesEditor({
           role="alert"
           className="rounded-md border border-error-bg bg-error-bg px-2 py-1.5 text-xs text-error"
         >
-          Saved rules file is invalid and is being ignored: {loadError}
+          已保存的规则文件无效，已忽略： {loadError}
         </p>
       )}
 
@@ -160,43 +179,49 @@ export function PermissionRulesEditor({
       </datalist>
 
       {rules.length === 0 && (
-        <p className="px-1 text-xs text-dim">No rules yet — the mode above decides everything.</p>
+        <p className="px-1 text-xs text-dim">
+          暂无规则，所有行为由上面的模式决定。
+        </p>
       )}
 
       {rules.map((rule, index) => (
         <div key={index} className="flex items-center gap-1.5">
           <select
             value={rule.action}
-            onChange={(e) => updateRule(index, { action: e.target.value as PermissionRuleAction })}
+            onChange={(e) =>
+              updateRule(index, {
+                action: e.target.value as PermissionRuleAction,
+              })
+            }
             className="rounded-md border border-border-strong bg-surface px-1.5 py-1 text-xs text-primary"
-            aria-label={`Rule ${index + 1} action`}
+            aria-label={`规则 ${index + 1} 操作`}
           >
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
+            <option value="allow">允许</option>
+            <option value="deny">拒绝</option>
           </select>
           <input
             type="text"
             value={rule.tool}
             onChange={(e) => updateRule(index, { tool: e.target.value })}
             list={TOOL_DATALIST_ID}
-            placeholder="tool (* = any)"
+            placeholder="工具（* = 任意）"
             className="w-28 rounded-md border border-border-strong bg-surface px-1.5 py-1 text-xs text-primary placeholder:text-dim"
-            aria-label={`Rule ${index + 1} tool`}
+            aria-label={`规则 ${index + 1} 工具`}
           />
           <input
             type="text"
-            value={rule.match ?? ''}
+            value={rule.match ?? ""}
             onChange={(e) => updateRule(index, { match: e.target.value })}
-            placeholder="pattern, e.g. npm test* (empty = any input)"
+            placeholder="匹配模式，例如 npm test*（留空 = 任意输入）"
             className="min-w-0 flex-1 rounded-md border border-border-strong bg-surface px-1.5 py-1 font-mono text-xs text-primary placeholder:text-dim"
-            aria-label={`Rule ${index + 1} pattern`}
+            aria-label={`规则 ${index + 1} 匹配模式`}
           />
           <button
             type="button"
             onClick={() => removeRule(index)}
             className="shrink-0 rounded-md p-1 text-dim transition-colors hover:text-error"
-            title="Remove rule"
-            aria-label={`Remove rule ${index + 1}`}
+            title="移除规则"
+            aria-label={`移除规则 ${index + 1}`}
           >
             <Trash2 size={13} />
           </button>
@@ -208,7 +233,7 @@ export function PermissionRulesEditor({
         onClick={() => onChange([...rules, emptyRule()])}
         className="flex items-center gap-1 rounded-md border border-dashed border-border-strong px-2 py-1 text-xs text-dim transition-colors hover:border-border-strong-hover hover:text-primary"
       >
-        <Plus size={12} /> Add rule
+        <Plus size={12} /> 添加规则
       </button>
 
       {actionError && (
@@ -217,5 +242,5 @@ export function PermissionRulesEditor({
         </p>
       )}
     </div>
-  )
+  );
 }

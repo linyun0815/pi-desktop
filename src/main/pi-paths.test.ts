@@ -4,6 +4,8 @@ import { join } from 'path'
 import {
   engineForBoundSession,
   engineForSessionPath,
+  getPiAgentDir,
+  getOmpAgentDir,
   getSessionsRoot,
   getOmpSessionsRoot,
   getSessionRoots,
@@ -33,6 +35,16 @@ function withEnv(vars: Record<string, string | undefined>, run: () => void): voi
     }
   }
 }
+
+test('agent directory helpers honor engine-specific overrides', () => {
+  withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: '/custom/pi', OMP_CODING_AGENT_DIR: '/custom/omp' }, () => {
+    assert.equal(getPiAgentDir(), '/custom/pi')
+    assert.equal(getOmpAgentDir(), '/custom/omp')
+    assert.equal(getSessionsRoot(), join('/custom/pi', 'sessions'))
+    assert.equal(getOmpSessionsRoot(), join('/custom/omp', 'sessions'))
+  })
+})
+
 
 test('the two engines resolve to different session stores', () => {
   withEnv({ HOME: '/home/tester', PI_CODING_AGENT_DIR: undefined, OMP_CODING_AGENT_DIR: undefined }, () => {

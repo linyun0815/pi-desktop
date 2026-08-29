@@ -1,40 +1,44 @@
-import { useEffect, useState } from 'react'
-import { clsx } from 'clsx'
-import { Plus, Trash2, Save, RefreshCw, AlertTriangle } from 'lucide-react'
-import { useAppStore } from '../store'
-import { withImageInput } from '../../../shared/models-config'
-import type { ModelsConfig, ProviderConfig, CustomModel } from '../../../shared/models-config'
+import { useEffect, useState } from "react";
+import { clsx } from "clsx";
+import { Plus, Trash2, Save, RefreshCw, AlertTriangle } from "lucide-react";
+import { useAppStore } from "../store";
+import { withImageInput } from "../../../shared/models-config";
+import type {
+  ModelsConfig,
+  ProviderConfig,
+  CustomModel,
+} from "../../../shared/models-config";
 
 const API_OPTIONS = [
-  'openai-completions',
-  'openai-responses',
-  'anthropic-messages',
-  'google-generative-ai',
-]
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+];
 
 interface ProviderRow {
-  key: string
-  baseUrl: string
-  api: string
-  apiKey: string
-  compat: ProviderConfig['compat']
-  models: CustomModel[]
+  key: string;
+  baseUrl: string;
+  api: string;
+  apiKey: string;
+  compat: ProviderConfig["compat"];
+  models: CustomModel[];
 }
 
 function configToRows(config: ModelsConfig | null): ProviderRow[] {
-  if (!config) return []
+  if (!config) return [];
   return Object.entries(config.providers ?? {}).map(([key, p]) => ({
     key,
-    baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
-    api: typeof p.api === 'string' ? p.api : '',
-    apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+    baseUrl: typeof p.baseUrl === "string" ? p.baseUrl : "",
+    api: typeof p.api === "string" ? p.api : "",
+    apiKey: typeof p.apiKey === "string" ? p.apiKey : "",
     compat: p.compat,
     models: Array.isArray(p.models) ? p.models : [],
-  }))
+  }));
 }
 
 function rowsToConfig(rows: ProviderRow[]): ModelsConfig {
-  const providers: ModelsConfig['providers'] = {}
+  const providers: ModelsConfig["providers"] = {};
   for (const r of rows) {
     providers[r.key.trim()] = {
       ...(r.baseUrl ? { baseUrl: r.baseUrl } : {}),
@@ -42,101 +46,128 @@ function rowsToConfig(rows: ProviderRow[]): ModelsConfig {
       ...(r.apiKey ? { apiKey: r.apiKey } : {}),
       ...(r.compat ? { compat: r.compat } : {}),
       models: r.models,
-    }
+    };
   }
-  return { providers }
+  return { providers };
 }
 
 export function CustomModelsEditor(): React.JSX.Element {
-  const customModels = useAppStore((s) => s.customModels)
-  const customModelsError = useAppStore((s) => s.customModelsError)
-  const loadCustomModels = useAppStore((s) => s.loadCustomModels)
-  const saveCustomModels = useAppStore((s) => s.saveCustomModels)
-  const restartPi = useAppStore((s) => s.restartPi)
+  const customModels = useAppStore((s) => s.customModels);
+  const customModelsError = useAppStore((s) => s.customModelsError);
+  const loadCustomModels = useAppStore((s) => s.loadCustomModels);
+  const saveCustomModels = useAppStore((s) => s.saveCustomModels);
+  const restartPi = useAppStore((s) => s.restartPi);
 
-  const [rows, setRows] = useState<ProviderRow[]>([])
-  const [errors, setErrors] = useState<string[]>([])
-  const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    loadCustomModels()
-  }, [loadCustomModels])
+  const [rows, setRows] = useState<ProviderRow[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    setRows(configToRows(customModels))
-  }, [customModels])
+    loadCustomModels();
+  }, [loadCustomModels]);
+
+  useEffect(() => {
+    setRows(configToRows(customModels));
+  }, [customModels]);
 
   const update = (next: ProviderRow[]): void => {
-    setRows(next)
-    setSaved(false)
-  }
+    setRows(next);
+    setSaved(false);
+  };
 
   const addProvider = (): void =>
-    update([...rows, { key: '', baseUrl: '', api: API_OPTIONS[0], apiKey: '', compat: undefined, models: [] }])
+    update([
+      ...rows,
+      {
+        key: "",
+        baseUrl: "",
+        api: API_OPTIONS[0],
+        apiKey: "",
+        compat: undefined,
+        models: [],
+      },
+    ]);
 
-  const removeProvider = (i: number): void => update(rows.filter((_, idx) => idx !== i))
+  const removeProvider = (i: number): void =>
+    update(rows.filter((_, idx) => idx !== i));
 
   const patchProvider = (i: number, patch: Partial<ProviderRow>): void =>
-    update(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
+    update(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
-  const patchProviderCompat = (i: number, patch: NonNullable<ProviderConfig['compat']>): void =>
-    patchProvider(i, { compat: { ...(rows[i].compat ?? {}), ...patch } })
+  const patchProviderCompat = (
+    i: number,
+    patch: NonNullable<ProviderConfig["compat"]>,
+  ): void =>
+    patchProvider(i, { compat: { ...(rows[i].compat ?? {}), ...patch } });
 
   const addModel = (i: number): void =>
-    patchProvider(i, { models: [...rows[i].models, { id: '' }] })
+    patchProvider(i, { models: [...rows[i].models, { id: "" }] });
 
-  const patchModel = (pi: number, mi: number, patch: Partial<CustomModel>): void =>
-    patchProvider(pi, { models: rows[pi].models.map((m, idx) => (idx === mi ? { ...m, ...patch } : m)) })
+  const patchModel = (
+    pi: number,
+    mi: number,
+    patch: Partial<CustomModel>,
+  ): void =>
+    patchProvider(pi, {
+      models: rows[pi].models.map((m, idx) =>
+        idx === mi ? { ...m, ...patch } : m,
+      ),
+    });
 
   const removeModel = (pi: number, mi: number): void =>
-    patchProvider(pi, { models: rows[pi].models.filter((_, idx) => idx !== mi) })
+    patchProvider(pi, {
+      models: rows[pi].models.filter((_, idx) => idx !== mi),
+    });
 
   const handleSave = async (): Promise<void> => {
     // Duplicate/empty provider keys collapse in object form, so check here.
-    const keys = rows.map((r) => r.key.trim())
-    const localErrors: string[] = []
-    if (keys.some((k) => k.length === 0)) localErrors.push('Every provider needs a non-empty key')
-    if (new Set(keys).size !== keys.length) localErrors.push('Provider keys must be unique')
+    const keys = rows.map((r) => r.key.trim());
+    const localErrors: string[] = [];
+    if (keys.some((k) => k.length === 0))
+      localErrors.push("每个提供商都必须填写非空键名");
+    if (new Set(keys).size !== keys.length)
+      localErrors.push("提供商键名必须唯一");
     if (localErrors.length > 0) {
-      setErrors(localErrors)
-      return
+      setErrors(localErrors);
+      return;
     }
-    const result = await saveCustomModels(rowsToConfig(rows))
+    const result = await saveCustomModels(rowsToConfig(rows));
     if (result.ok) {
-      setErrors([])
-      setSaved(true)
+      setErrors([]);
+      setSaved(true);
     } else {
-      setErrors(result.errors ?? ['Save failed'])
+      setErrors(result.errors ?? ["保存失败"]);
     }
-  }
+  };
 
   if (customModelsError) {
     return (
       <div className="flex items-start gap-2 text-sm text-warning">
         <AlertTriangle size={16} className="mt-0.5 shrink-0" />
         <div>
-          <p>Could not load models.json safely, so editing is disabled to avoid overwriting it.</p>
+          <p>无法安全加载 models.json，已禁用编辑以避免覆盖文件。</p>
           <p className="mt-1 text-xs text-dim">{customModelsError}</p>
           <button
             onClick={() => loadCustomModels()}
             className="mt-2 rounded border border-border-strong px-2 py-1 text-xs text-secondary hover:bg-surface-hover"
           >
-            Retry
+            重试
           </button>
         </div>
       </div>
-    )
+    );
   }
 
   return (
     <div className="space-y-4">
       <p className="text-xs text-dim">
-        Custom providers and models in <code>~/.pi/agent/models.json</code>. Applied when Pi restarts.
+        <code>~/.pi/agent/models.json</code> 中的自定义提供商和模型。Pi
+        重启后生效。
       </p>
       <p className="text-xs text-faint">
-        Heads-up: imported models may load without capability flags set. If a model supports
-        thinking, tick <span className="text-muted">reasoning</span>; if it accepts images,
-        tick <span className="text-muted">vision</span>. Restart Pi to apply.
+        提示：导入的模型可能没有设置能力标记。如果模型支持思考，请勾选{" "}
+        <span className="text-muted">reasoning</span>；如果支持图像输入，请勾选{" "}
+        <span className="text-muted">vision</span>。重启 Pi 后生效。
       </p>
 
       {rows.map((row, pi) => (
@@ -145,13 +176,13 @@ export function CustomModelsEditor(): React.JSX.Element {
             <input
               value={row.key}
               onChange={(e) => patchProvider(pi, { key: e.target.value })}
-              placeholder="provider-key (e.g. ollama)"
+              placeholder="提供商键名（例如 ollama）"
               className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
             />
             <button
               onClick={() => removeProvider(pi)}
               className="rounded p-1 text-dim hover:bg-surface-hover hover:text-error"
-              title="Remove provider"
+              title="移除提供商"
             >
               <Trash2 size={14} />
             </button>
@@ -170,7 +201,9 @@ export function CustomModelsEditor(): React.JSX.Element {
               className="rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
             >
               {API_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>{opt}</option>
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
               ))}
             </select>
           </div>
@@ -178,64 +211,79 @@ export function CustomModelsEditor(): React.JSX.Element {
             <input
               type="checkbox"
               checked={row.compat?.supportsReasoningEffort ?? false}
-              onChange={(e) => patchProviderCompat(pi, { supportsReasoningEffort: e.target.checked })}
+              onChange={(e) =>
+                patchProviderCompat(pi, {
+                  supportsReasoningEffort: e.target.checked,
+                })
+              }
               className="accent-accent"
             />
-            supports reasoning effort
+            支持思考强度
           </label>
           <input
             value={row.apiKey}
             onChange={(e) => patchProvider(pi, { apiKey: e.target.value })}
-            placeholder="apiKey — literal, $ENV_VAR, or !shell-command"
+            placeholder="apiKey — 直接值、$ENV_VAR 或 !shell-command"
             className="mt-2 w-full rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
           />
 
           <div className="mt-3 space-y-2">
             {row.models.map((model, mi) => (
-              <div key={mi} className="rounded border border-border bg-surface/50 p-2">
+              <div
+                key={mi}
+                className="rounded border border-border bg-surface/50 p-2"
+              >
                 <div className="flex items-center gap-2">
                   <input
-                    value={model.id ?? ''}
+                    value={model.id ?? ""}
                     onChange={(e) => patchModel(pi, mi, { id: e.target.value })}
-                    placeholder="model id (required)"
+                    placeholder="模型 ID（必填）"
                     className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
                   />
                   <input
-                    value={model.name ?? ''}
-                    onChange={(e) => patchModel(pi, mi, { name: e.target.value })}
-                    placeholder="name"
+                    value={model.name ?? ""}
+                    onChange={(e) =>
+                      patchModel(pi, mi, { name: e.target.value })
+                    }
+                    placeholder="名称"
                     className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
                   />
                   <button
                     onClick={() => removeModel(pi, mi)}
                     className="rounded p-1 text-dim hover:bg-surface-hover hover:text-error"
-                    title="Remove model"
+                    title="移除模型"
                   >
                     <Trash2 size={12} />
                   </button>
                 </div>
                 <div className="mt-2 grid grid-cols-4 gap-2">
                   <label className="flex items-center gap-1 text-[11px] text-dim">
-                    ctx
+                    上下文
                     <input
                       type="number"
-                      value={model.contextWindow ?? ''}
+                      value={model.contextWindow ?? ""}
                       onChange={(e) =>
                         patchModel(pi, mi, {
-                          contextWindow: e.target.value === '' ? undefined : Number(e.target.value),
+                          contextWindow:
+                            e.target.value === ""
+                              ? undefined
+                              : Number(e.target.value),
                         })
                       }
                       className="w-full rounded border border-border-strong bg-surface px-1 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
                     />
                   </label>
                   <label className="flex items-center gap-1 text-[11px] text-dim">
-                    max
+                    最大
                     <input
                       type="number"
-                      value={model.maxTokens ?? ''}
+                      value={model.maxTokens ?? ""}
                       onChange={(e) =>
                         patchModel(pi, mi, {
-                          maxTokens: e.target.value === '' ? undefined : Number(e.target.value),
+                          maxTokens:
+                            e.target.value === ""
+                              ? undefined
+                              : Number(e.target.value),
                         })
                       }
                       className="w-full rounded border border-border-strong bg-surface px-1 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
@@ -245,21 +293,25 @@ export function CustomModelsEditor(): React.JSX.Element {
                     <input
                       type="checkbox"
                       checked={model.reasoning ?? false}
-                      onChange={(e) => patchModel(pi, mi, { reasoning: e.target.checked })}
+                      onChange={(e) =>
+                        patchModel(pi, mi, { reasoning: e.target.checked })
+                      }
                       className="accent-accent"
                     />
-                    reasoning
+                    思考
                   </label>
                   <label className="flex items-center gap-1 text-[11px] text-dim">
                     <input
                       type="checkbox"
-                      checked={model.input?.includes('image') ?? false}
+                      checked={model.input?.includes("image") ?? false}
                       onChange={(e) =>
-                        patchModel(pi, mi, { input: withImageInput(model.input, e.target.checked) })
+                        patchModel(pi, mi, {
+                          input: withImageInput(model.input, e.target.checked),
+                        })
                       }
                       className="accent-accent"
                     />
-                    vision
+                    视觉
                   </label>
                 </div>
               </div>
@@ -268,7 +320,7 @@ export function CustomModelsEditor(): React.JSX.Element {
               onClick={() => addModel(pi)}
               className="flex items-center gap-1 text-xs text-muted hover:text-primary"
             >
-              <Plus size={12} /> Add model
+              <Plus size={12} /> 添加模型
             </button>
           </div>
         </div>
@@ -278,7 +330,7 @@ export function CustomModelsEditor(): React.JSX.Element {
         onClick={addProvider}
         className="flex items-center gap-1 text-sm text-muted hover:text-primary"
       >
-        <Plus size={14} /> Add provider
+        <Plus size={14} /> 添加提供商
       </button>
 
       {errors.length > 0 && (
@@ -295,21 +347,21 @@ export function CustomModelsEditor(): React.JSX.Element {
           className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm text-white hover:bg-accent-hover transition-colors"
         >
           <Save size={14} />
-          Save models.json
+          保存 models.json
         </button>
         {saved && (
           <button
             onClick={() => restartPi()}
             className={clsx(
-              'flex items-center gap-2 rounded-md border border-border-strong px-3 py-2 text-sm',
-              'text-secondary hover:bg-surface-hover transition-colors'
+              "flex items-center gap-2 rounded-md border border-border-strong px-3 py-2 text-sm",
+              "text-secondary hover:bg-surface-hover transition-colors",
             )}
           >
             <RefreshCw size={14} />
-            Saved — Restart Pi to apply
+            已保存，重启 Pi 后生效
           </button>
         )}
       </div>
     </div>
-  )
+  );
 }

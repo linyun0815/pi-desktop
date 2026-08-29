@@ -1,15 +1,29 @@
-import { join } from 'path'
-import { isPathWithin } from './path-authorization'
-import type { AgentEngineKind } from '../shared/ipc-contracts'
+import { join } from "path";
+import { isPathWithin } from "./path-authorization";
+import type { AgentEngineKind } from "../shared/ipc-contracts";
+
+/** Absolute Pi agent directory, honoring the engine's environment override. */
+export function getPiAgentDir(): string {
+ return (
+  process.env.PI_CODING_AGENT_DIR ||
+  join(process.env.HOME ?? process.env.USERPROFILE ?? "", ".pi", "agent")
+ );
+}
+
+/** Absolute OMP agent directory, honoring the engine's environment override. */
+export function getOmpAgentDir(): string {
+ return (
+  process.env.OMP_CODING_AGENT_DIR ||
+  join(process.env.HOME ?? process.env.USERPROFILE ?? "", ".omp", "agent")
+ );
+}
 
 /**
  * Absolute path to Pi's on-disk session store (`~/.pi/agent/sessions`).
  * Centralized so session listing, lineage, and activity aggregation agree.
  */
 export function getSessionsRoot(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ||
-    join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.pi', 'agent')
-  return join(agentDir, 'sessions')
+ return join(getPiAgentDir(), "sessions");
 }
 
 /**
@@ -21,9 +35,7 @@ export function getSessionsRoot(): string {
  * index can read them side by side.
  */
 export function getOmpSessionsRoot(): string {
-  const agentDir = process.env.OMP_CODING_AGENT_DIR ||
-    join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.omp', 'agent')
-  return join(agentDir, 'sessions')
+ return join(getOmpAgentDir(), "sessions");
 }
 
 /**
@@ -32,7 +44,7 @@ export function getOmpSessionsRoot(): string {
  * cannot list the same session twice.
  */
 export function getSessionRoots(): string[] {
-  return [...new Set([getSessionsRoot(), getOmpSessionsRoot()])]
+ return [...new Set([getSessionsRoot(), getOmpSessionsRoot()])];
 }
 
 /**
@@ -41,10 +53,12 @@ export function getSessionRoots(): string[] {
  * the other's) resolves the way getSessionRoots orders it. Null means the path
  * is in no store at all, which is also what makes it unauthorized.
  */
-export function engineForSessionPath(candidate: string): AgentEngineKind | null {
-  if (isPathWithin(getSessionsRoot(), candidate)) return 'pi'
-  if (isPathWithin(getOmpSessionsRoot(), candidate)) return 'omp'
-  return null
+export function engineForSessionPath(
+ candidate: string,
+): AgentEngineKind | null {
+ if (isPathWithin(getSessionsRoot(), candidate)) return "pi";
+ if (isPathWithin(getOmpSessionsRoot(), candidate)) return "omp";
+ return null;
 }
 
 /**
@@ -57,11 +71,12 @@ export function engineForSessionPath(candidate: string): AgentEngineKind | null 
  * on which engine a start belongs to — the tool names differ per engine, so a
  * disagreement sends OMP Pi's tool list.
  */
-export function engineForBoundSession(
-  bound: { sessionPath?: string; forkSessionPath?: string }
-): AgentEngineKind | null {
-  const boundSessionPath = bound.forkSessionPath ?? bound.sessionPath
-  return boundSessionPath ? engineForSessionPath(boundSessionPath) : null
+export function engineForBoundSession(bound: {
+ sessionPath?: string;
+ forkSessionPath?: string;
+}): AgentEngineKind | null {
+ const boundSessionPath = bound.forkSessionPath ?? bound.sessionPath;
+ return boundSessionPath ? engineForSessionPath(boundSessionPath) : null;
 }
 
 /**
@@ -70,5 +85,5 @@ export function engineForBoundSession(
  * else is refused, which is what keeps resume/fork/delete inside the stores.
  */
 export function isWithinSessionRoots(candidate: string): boolean {
-  return engineForSessionPath(candidate) !== null
+ return engineForSessionPath(candidate) !== null;
 }

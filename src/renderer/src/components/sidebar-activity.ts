@@ -1,4 +1,7 @@
-import type { WorkspaceActivity, WorkspaceActivityMap } from '../../../shared/ipc-contracts'
+import type {
+  WorkspaceActivity,
+  WorkspaceActivityMap,
+} from "../../../shared/ipc-contracts";
 
 /**
  * Pure helpers mapping the main-process workspace-activity map to sidebar
@@ -9,25 +12,25 @@ import type { WorkspaceActivity, WorkspaceActivityMap } from '../../../shared/ip
 
 export interface ActivityIndicator {
   /** Semantic background class for the dot. */
-  colorClass: string
+  colorClass: string;
   /** Pulse animation for in-flight work. */
-  pulse: boolean
+  pulse: boolean;
   /** Tooltip text. */
-  label: string
+  label: string;
 }
 
 export function workspaceActivityIndicator(
   activity: WorkspaceActivity | undefined,
 ): ActivityIndicator | null {
   switch (activity?.state) {
-    case 'working':
-      return { colorClass: 'bg-accent', pulse: true, label: 'Pi is working' }
-    case 'completed':
-      return { colorClass: 'bg-success', pulse: false, label: 'Finished in the background' }
-    case 'failed':
-      return { colorClass: 'bg-error', pulse: false, label: 'Stopped with an error' }
+    case "working":
+      return { colorClass: "bg-accent", pulse: true, label: "Pi 正在工作" };
+    case "completed":
+      return { colorClass: "bg-success", pulse: false, label: "后台已完成" };
+    case "failed":
+      return { colorClass: "bg-error", pulse: false, label: "因错误停止" };
     default:
-      return null
+      return null;
   }
 }
 
@@ -40,20 +43,21 @@ export function summarizeBackgroundActivity(
   map: WorkspaceActivityMap,
   activeWorkspaceId: string | null,
 ): ActivityIndicator | null {
-  let best: ActivityIndicator | null = null
-  let bestRank = -1
-  const ranks = { failed: 3, completed: 2, working: 1 } as const
+  let best: ActivityIndicator | null = null;
+  let bestRank = -1;
+  const ranks = { failed: 3, completed: 2, working: 1 } as const;
 
   for (const [workspaceId, activity] of Object.entries(map)) {
-    if (workspaceId === activeWorkspaceId) continue
-    const rank = activity.state in ranks ? ranks[activity.state as keyof typeof ranks] : 0
+    if (workspaceId === activeWorkspaceId) continue;
+    const rank =
+      activity.state in ranks ? ranks[activity.state as keyof typeof ranks] : 0;
     if (rank > bestRank) {
-      const indicator = workspaceActivityIndicator(activity)
+      const indicator = workspaceActivityIndicator(activity);
       if (indicator) {
-        best = { ...indicator, label: `${indicator.label} in another workspace` }
-        bestRank = rank
+        best = { ...indicator, label: `${indicator.label}（其他工作区）` };
+        bestRank = rank;
       }
     }
   }
-  return best
+  return best;
 }

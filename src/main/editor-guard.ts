@@ -7,42 +7,44 @@
 
 export interface EditorGuard {
   /** Mirror of the renderer's dirty flag; new edits re-arm a confirmed discard. */
-  setDirty(dirty: boolean, fileName: string | null): void
+  setDirty(dirty: boolean, fileName: string | null): void;
   /** Renderer reloaded or crashed: its buffer is gone, nothing left to guard. */
-  reset(): void
+  reset(): void;
   /** True when a teardown must pause for the discard confirmation. */
-  needsPrompt(): boolean
+  needsPrompt(): boolean;
   /** Record an accepted discard so the resumed teardown is not asked again. */
-  confirmDiscard(): void
+  confirmDiscard(): void;
   /** Dialog text, naming the dirty file when the renderer reported one. */
-  promptMessage(): string
+  promptMessage(): string;
 }
 
 export function createEditorGuard(): EditorGuard {
-  let dirty = false
-  let fileName: string | null = null
-  let discardConfirmed = false
+  let dirty = false;
+  let fileName: string | null = null;
+  let discardConfirmed = false;
 
   return {
     setDirty(nextDirty, nextFileName) {
-      dirty = nextDirty
-      fileName = nextDirty ? nextFileName : null
+      dirty = nextDirty;
+      fileName = nextDirty ? nextFileName : null;
       // Fresh edits are a fresh decision, even right after a confirmed discard.
-      if (nextDirty) discardConfirmed = false
+      if (nextDirty) discardConfirmed = false;
     },
     reset() {
-      dirty = false
-      fileName = null
-      discardConfirmed = false
+      dirty = false;
+      fileName = null;
+      discardConfirmed = false;
     },
     needsPrompt() {
-      return dirty && !discardConfirmed
+      return dirty && !discardConfirmed;
     },
     confirmDiscard() {
-      discardConfirmed = true
+      discardConfirmed = true;
     },
     promptMessage() {
-      return fileName ? `Discard unsaved changes to ${fileName}?` : 'Discard unsaved changes?'
+      return fileName
+        ? `放弃对 ${fileName} 的未保存改动？`
+        : "放弃未保存的改动？";
     },
-  }
+  };
 }

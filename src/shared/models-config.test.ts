@@ -14,7 +14,7 @@ test('empty config is valid', () => {
 
 test('flags empty provider key', () => {
   const errs = validateModelsConfig({ providers: { '': { models: [{ id: 'a' }] } } })
-  assert.ok(errs.some((e) => e.toLowerCase().includes('provider')))
+  assert.ok(errs.some((e) => e.includes('提供商')))
 })
 
 test('flags model with empty id', () => {
@@ -26,7 +26,7 @@ test('flags duplicate model id within a provider', () => {
   const errs = validateModelsConfig({
     providers: { p: { models: [{ id: 'x' }, { id: 'x' }] } },
   })
-  assert.ok(errs.some((e) => e.toLowerCase().includes('duplicate')))
+  assert.ok(errs.some((e) => e.includes('重复')))
 })
 
 test('flags non-finite numeric field', () => {

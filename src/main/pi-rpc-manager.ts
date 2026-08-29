@@ -1,8 +1,8 @@
-import { ChildProcess, SpawnOptions, spawn, spawnSync } from 'child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs'
-import { join } from 'path'
-import { EventEmitter } from 'events'
-import { StringDecoder } from 'string_decoder'
+import { ChildProcess, SpawnOptions, spawn, spawnSync } from "child_process";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
+import { join } from "path";
+import { EventEmitter } from "events";
+import { StringDecoder } from "string_decoder";
 import type {
   AgentEngineKind,
   PiRpcEvent,
@@ -11,18 +11,23 @@ import type {
   PiStatus,
   PiResponseEvent,
   AgentInstallation,
-} from '../shared/ipc-contracts'
-import type { CaptureOptions, PiEngine, PiResolution, ResolutionDeps } from './pi-binary-resolution'
+} from "../shared/ipc-contracts";
+import type {
+  CaptureOptions,
+  PiEngine,
+  PiResolution,
+  ResolutionDeps,
+} from "./pi-binary-resolution";
 import {
   describePiResolutionFailure,
   isOmpExecutable,
   normalizeOverride,
   resolvePiBinary,
   whichInPath,
-} from './pi-binary-resolution'
-import { escapeCmdSpawn } from './cmd-escape'
-import { appLog } from './app-log'
-import { getGuiDataPath } from './app-data-paths'
+} from "./pi-binary-resolution";
+import { escapeCmdSpawn } from "./cmd-escape";
+import { appLog } from "./app-log";
+import { getGuiDataPath } from "./app-data-paths";
 
 /**
  * Manages a Pi RPC child process.
@@ -35,22 +40,22 @@ import { getGuiDataPath } from './app-data-paths'
  * - Handle extension UI request/response sub-protocol
  */
 
-const JSONL_NEWLINE = '\n'
-const RPC_MODE = 'rpc'
-const NO_SESSION_FLAG = '--no-session'
-const MODE_FLAG = '--mode'
-const PROVIDER_FLAG = '--provider'
-const MODEL_FLAG = '--model'
-const SESSION_FLAG = '--session'
-const FORK_FLAG = '--fork'
-const CONTINUE_FLAG = '--continue'
-const IS_WINDOWS = process.platform === 'win32'
-const SPAWN_STARTUP_TIMEOUT_MS = 15_000
+const JSONL_NEWLINE = "\n";
+const RPC_MODE = "rpc";
+const NO_SESSION_FLAG = "--no-session";
+const MODE_FLAG = "--mode";
+const PROVIDER_FLAG = "--provider";
+const MODEL_FLAG = "--model";
+const SESSION_FLAG = "--session";
+const FORK_FLAG = "--fork";
+const CONTINUE_FLAG = "--continue";
+const IS_WINDOWS = process.platform === "win32";
+const SPAWN_STARTUP_TIMEOUT_MS = 15_000;
 // Spawn attempts per start(): the initial try plus one retry, used ONLY when Pi
 // crashes before becoming ready (spawn error / early exit) — a transient hiccup
 // (AV lock, momentary ENOENT) often clears on a second spawn. A no-response
 // timeout is not retried: respawning would just burn another full timeout.
-const STARTUP_MAX_ATTEMPTS = 2
+const STARTUP_MAX_ATTEMPTS = 2;
 // Pi's RPC mode emits nothing on connect — it only replies to requests. So
 // instead of a blind settle wait, we send a cheap read-only probe after spawn
 // and treat its CORRELATED response (matched by STARTUP_PROBE_ID in handleLine,
@@ -59,15 +64,15 @@ const STARTUP_MAX_ATTEMPTS = 2
 // robust even if the probe command is renamed (Pi echoes our id on an "unknown
 // command" error too). The probe is resent on this interval in case the first
 // write raced Pi's stdin reader; SPAWN_STARTUP_TIMEOUT_MS bounds the wait.
-const STARTUP_PROBE_ID = '__startup_probe__'
+const STARTUP_PROBE_ID = "__startup_probe__";
 // get_state is the cheapest liveness command: a handful of in-memory session
 // field reads — no I/O, no model/provider calls, O(1). (get_session_stats is
 // O(messages) and get_available_models filters the model list.)
-const STARTUP_PROBE_COMMAND = 'get_state'
-const STARTUP_PROBE_INTERVAL_MS = 750
-const FORCE_KILL_TIMEOUT_MS = 3_000
+const STARTUP_PROBE_COMMAND = "get_state";
+const STARTUP_PROBE_INTERVAL_MS = 750;
+const FORCE_KILL_TIMEOUT_MS = 3_000;
 /** Bound on the one `ps` call used to snapshot a child's descendants at kill time. */
-const PROCESS_TREE_TIMEOUT_MS = 2_000
+const PROCESS_TREE_TIMEOUT_MS = 2_000;
 /**
  * Fallbacks only. The engine advertises its real limits in the `ready` frame
  * (`maxFrameBytes`, `maxReassembledFrameBytes`); configureLimits() adopts those
@@ -75,11 +80,26 @@ const PROCESS_TREE_TIMEOUT_MS = 2_000
  * defaults match what OMP 18 advertises and are used until `ready` arrives, and
  * for the original Pi RPC implementation, which sends no ready frame.
  */
-const RPC_DEFAULT_MAX_REASSEMBLED_BYTES = 64 * 1024 * 1024
-const RPC_DEFAULT_MAX_CHUNK_PAYLOAD_BYTES = 1024 * 1024
+const RPC_DEFAULT_MAX_REASSEMBLED_BYTES = 64 * 1024 * 1024;
+const RPC_DEFAULT_MAX_CHUNK_PAYLOAD_BYTES = 1024 * 1024;
+/** A malformed/verbose child must not retain an unbounded ordinary JSONL line. */
+export const RPC_MAX_LINE_BYTES = 8 * 1024 * 1024;
+/** Keep enough stderr for diagnostics without retaining a process-long log. */
+export const RPC_MAX_STDERR_BYTES = 2 * 1024 * 1024;
+
+export function appendBoundedTail(
+  current: string,
+  incoming: string,
+  maxBytes = RPC_MAX_STDERR_BYTES,
+): string {
+  const combined = Buffer.from(current + incoming, "utf8");
+  if (combined.byteLength <= maxBytes) return combined.toString("utf8");
+  return combined.subarray(combined.byteLength - maxBytes).toString("utf8");
+}
+
 /** Chunking only exists for frames a single line cannot carry. */
-const RPC_MIN_CHUNK_COUNT = 2
-const RPC_MAX_CHUNK_ID_LENGTH = 128
+const RPC_MIN_CHUNK_COUNT = 2;
+const RPC_MAX_CHUNK_ID_LENGTH = 128;
 /**
  * Standard base64 with the padding the sender's encoder emits. The alphabet
  * and the padding shape are enforced here; the round-trip re-encode in push()
@@ -89,33 +109,38 @@ const RPC_MAX_CHUNK_ID_LENGTH = 128
  * are rejected by this pattern, not by the round-trip — the two checks state
  * the same policy and are loosened or kept together.
  */
-const RPC_CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const RPC_CANONICAL_BASE64 =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 interface PendingRpcChunks {
-  chunkId: string
-  count: number
-  byteLength: number
-  nextIndex: number
-  chunks: Buffer[]
-  receivedBytes: number
+  chunkId: string;
+  count: number;
+  byteLength: number;
+  nextIndex: number;
+  chunks: Buffer[];
+  receivedBytes: number;
 }
 
 function isRpcChunkFrame(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'rpc_chunk'
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "rpc_chunk"
+  );
 }
 
 /** Minimal lossless decoder for OMP RPC protocol v2 physical frames. */
 export class RpcFrameDecoder {
-  private pending: PendingRpcChunks | null = null
-  private maxReassembledBytes = RPC_DEFAULT_MAX_REASSEMBLED_BYTES
-  private maxChunkPayloadBytes = RPC_DEFAULT_MAX_CHUNK_PAYLOAD_BYTES
+  private pending: PendingRpcChunks | null = null;
+  private maxReassembledBytes = RPC_DEFAULT_MAX_REASSEMBLED_BYTES;
+  private maxChunkPayloadBytes = RPC_DEFAULT_MAX_CHUNK_PAYLOAD_BYTES;
 
   hasPending(): boolean {
-    return this.pending !== null
+    return this.pending !== null;
   }
 
   reset(): void {
-    this.pending = null
+    this.pending = null;
   }
 
   /**
@@ -124,69 +149,112 @@ export class RpcFrameDecoder {
    * largest payload any one chunk can carry. Ignores absent or nonsensical
    * values so a malformed ready frame cannot widen or break the decoder.
    */
-  configureLimits(limits: { maxFrameBytes?: unknown; maxReassembledFrameBytes?: unknown }): void {
-    const frame = limits.maxFrameBytes
-    const reassembled = limits.maxReassembledFrameBytes
-    if (typeof frame === 'number' && Number.isSafeInteger(frame) && frame > 0) {
-      this.maxChunkPayloadBytes = frame
+  configureLimits(limits: {
+    maxFrameBytes?: unknown;
+    maxReassembledFrameBytes?: unknown;
+  }): void {
+    const frame = limits.maxFrameBytes;
+    const reassembled = limits.maxReassembledFrameBytes;
+    if (typeof frame === "number" && Number.isSafeInteger(frame) && frame > 0) {
+      this.maxChunkPayloadBytes = frame;
     }
-    if (typeof reassembled === 'number' && Number.isSafeInteger(reassembled) && reassembled > 0) {
-      this.maxReassembledBytes = reassembled
+    if (
+      typeof reassembled === "number" &&
+      Number.isSafeInteger(reassembled) &&
+      reassembled > 0
+    ) {
+      this.maxReassembledBytes = reassembled;
     }
   }
 
   push(value: Record<string, unknown>): object | undefined {
-    const chunkId = value.chunkId
-    const index = typeof value.index === 'number' ? value.index : Number.NaN
-    const count = typeof value.count === 'number' ? value.count : Number.NaN
-    const byteLength = typeof value.byteLength === 'number' ? value.byteLength : Number.NaN
-    const data = value.data
+    const chunkId = value.chunkId;
+    const index = typeof value.index === "number" ? value.index : Number.NaN;
+    const count = typeof value.count === "number" ? value.count : Number.NaN;
+    const byteLength =
+      typeof value.byteLength === "number" ? value.byteLength : Number.NaN;
+    const data = value.data;
     // `byteLength` is bounded above only. How the sender splits a frame is its
     // own business, so there is no floor: a floor of one whole frame would make
     // every short chunk sequence undecodable if the sender ever lowered its
     // frame cap. A wrong declared length is still caught while reassembling,
     // against the bytes actually received.
-    const maxChunkCount = Math.ceil(this.maxReassembledBytes / this.maxChunkPayloadBytes)
+    const maxChunkCount = Math.ceil(
+      this.maxReassembledBytes / this.maxChunkPayloadBytes,
+    );
     if (
-      typeof chunkId !== 'string' || chunkId.length === 0 || chunkId.length > RPC_MAX_CHUNK_ID_LENGTH ||
-      !Number.isSafeInteger(index) || !Number.isSafeInteger(count) || !Number.isSafeInteger(byteLength) ||
-      index < 0 || count < RPC_MIN_CHUNK_COUNT || count > maxChunkCount || index >= count ||
-      byteLength <= 0 || byteLength > this.maxReassembledBytes ||
-      typeof data !== 'string' || data.length === 0 || !RPC_CANONICAL_BASE64.test(data)
+      typeof chunkId !== "string" ||
+      chunkId.length === 0 ||
+      chunkId.length > RPC_MAX_CHUNK_ID_LENGTH ||
+      !Number.isSafeInteger(index) ||
+      !Number.isSafeInteger(count) ||
+      !Number.isSafeInteger(byteLength) ||
+      index < 0 ||
+      count < RPC_MIN_CHUNK_COUNT ||
+      count > maxChunkCount ||
+      index >= count ||
+      byteLength <= 0 ||
+      byteLength > this.maxReassembledBytes ||
+      typeof data !== "string" ||
+      data.length === 0 ||
+      !RPC_CANONICAL_BASE64.test(data)
     ) {
-      throw new Error('invalid rpc chunk metadata')
+      throw new Error("invalid rpc chunk metadata");
     }
-    const chunkIndex = index as number
-    const chunkCount = count as number
-    const declaredByteLength = byteLength as number
-    const bytes = Buffer.from(data, 'base64')
-    if (bytes.toString('base64') !== data || bytes.byteLength > this.maxChunkPayloadBytes) {
-      throw new Error('invalid rpc chunk data')
+    const chunkIndex = index as number;
+    const chunkCount = count as number;
+    const declaredByteLength = byteLength as number;
+    const bytes = Buffer.from(data, "base64");
+    if (
+      bytes.toString("base64") !== data ||
+      bytes.byteLength > this.maxChunkPayloadBytes
+    ) {
+      throw new Error("invalid rpc chunk data");
     }
 
     if (!this.pending) {
-      if (chunkIndex !== 0) throw new Error('rpc chunk sequence must start at index 0')
-      this.pending = { chunkId, count: chunkCount, byteLength: declaredByteLength, nextIndex: 0, chunks: [], receivedBytes: 0 }
+      if (chunkIndex !== 0)
+        throw new Error("rpc chunk sequence must start at index 0");
+      this.pending = {
+        chunkId,
+        count: chunkCount,
+        byteLength: declaredByteLength,
+        nextIndex: 0,
+        chunks: [],
+        receivedBytes: 0,
+      };
     }
-    const pending = this.pending!
+    const pending = this.pending!;
     if (
-      pending.chunkId !== chunkId || pending.count !== chunkCount || pending.byteLength !== declaredByteLength ||
+      pending.chunkId !== chunkId ||
+      pending.count !== chunkCount ||
+      pending.byteLength !== declaredByteLength ||
       pending.nextIndex !== chunkIndex
     ) {
-      throw new Error('rpc chunk sequence mismatch')
+      throw new Error("rpc chunk sequence mismatch");
     }
-    pending.chunks.push(bytes)
-    pending.receivedBytes += bytes.byteLength
-    pending.nextIndex++
-    if (pending.receivedBytes > pending.byteLength) throw new Error('rpc chunk sequence exceeds declared length')
-    if (pending.nextIndex < pending.count) return undefined
-    if (pending.receivedBytes !== pending.byteLength) throw new Error('rpc chunk sequence length mismatch')
+    pending.chunks.push(bytes);
+    pending.receivedBytes += bytes.byteLength;
+    pending.nextIndex++;
+    if (pending.receivedBytes > pending.byteLength)
+      throw new Error("rpc chunk sequence exceeds declared length");
+    if (pending.nextIndex < pending.count) return undefined;
+    if (pending.receivedBytes !== pending.byteLength)
+      throw new Error("rpc chunk sequence length mismatch");
 
-    this.pending = null
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(pending.chunks))
-    const frame = JSON.parse(decoded) as unknown
-    if (typeof frame !== 'object' || frame === null || Array.isArray(frame)) throw new Error('rpc frame must be an object')
-    return frame as object
+    this.pending = null;
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.concat(pending.chunks),
+    );
+    let frame: unknown;
+    try {
+      frame = JSON.parse(decoded) as unknown;
+    } catch {
+      throw new Error("rpc frame is not valid JSON");
+    }
+    if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+      throw new Error("rpc frame must be an object");
+    return frame as object;
   }
 }
 
@@ -198,50 +266,60 @@ const RESOLUTION_DEPS: ResolutionDeps = {
   exists: (path) => existsSync(path),
   isDirectory: (path) => {
     try {
-      return statSync(path).isDirectory()
+      return statSync(path).isDirectory();
     } catch (err) {
       // ENOENT/EACCES/ELOOP all mean "not a directory we can use".
-      if (isFsAccessError(err)) return false
-      throw err
+      if (isFsAccessError(err)) return false;
+      throw err;
     }
   },
   listDir: (path) => {
     try {
-      return readdirSync(path)
+      return readdirSync(path);
     } catch (err) {
-      if (isFsAccessError(err)) return []
-      throw err
+      if (isFsAccessError(err)) return [];
+      throw err;
     }
   },
   capture: (command, args, options) => runCapture(command, args, options),
-}
+};
 
-const FS_ACCESS_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'ELOOP'])
+const FS_ACCESS_ERROR_CODES = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "ELOOP",
+]);
 
 function isFsAccessError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException | null)?.code
-  return typeof code === 'string' && FS_ACCESS_ERROR_CODES.has(code)
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && FS_ACCESS_ERROR_CODES.has(code);
 }
 
 /**
  * Run a probe command and return its stdout, or null if it could not run.
  * stdin is closed immediately so an interactive login shell never blocks.
  */
-function runCapture(command: string, args: string[], options: CaptureOptions): string | null {
+function runCapture(
+  command: string,
+  args: string[],
+  options: CaptureOptions,
+): string | null {
   try {
     const result = spawnSync(command, args, {
-      encoding: 'utf-8',
+      encoding: "utf-8",
       shell: options.shell,
       timeout: options.timeoutMs,
-      input: '',
+      input: "",
       env: { ...process.env, PATH: options.pathEnv },
-    })
-    if (result.status !== 0 || !result.stdout) return null
-    return result.stdout
+    });
+    if (result.status !== 0 || !result.stdout) return null;
+    return result.stdout;
   } catch (err) {
     // Spawn-level failure (missing binary, EACCES) — treat as "no answer".
-    if (isFsAccessError(err)) return null
-    throw err
+    if (isFsAccessError(err)) return null;
+    throw err;
   }
 }
 
@@ -251,38 +329,50 @@ function runCapture(command: string, args: string[], options: CaptureOptions): s
  * common install paths, and PATH.
  */
 function findNodeBinary(): string {
-  if (process.env.NODE && existsSync(process.env.NODE)) return process.env.NODE
-  if (process.env.npm_node_execpath && existsSync(process.env.npm_node_execpath)) {
-    return process.env.npm_node_execpath
+  if (process.env.NODE && existsSync(process.env.NODE)) return process.env.NODE;
+  if (
+    process.env.npm_node_execpath &&
+    existsSync(process.env.npm_node_execpath)
+  ) {
+    return process.env.npm_node_execpath;
   }
 
   if (IS_WINDOWS) {
-    const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
-    const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
-    const localAppData = process.env.LOCALAPPDATA ?? ''
+    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+    const programFilesX86 =
+      process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const localAppData = process.env.LOCALAPPDATA ?? "";
     const candidates = [
       // Pi's install.ps1 puts an auto-installed Node under
       // %LOCALAPPDATA%\pi-node\current\node.exe. Check the symlinked
       // 'current' path first; fall back to the bare pi-node dir for
       // older layouts.
-      localAppData ? join(localAppData, 'pi-node', 'current', 'node.exe') : '',
-      localAppData ? join(localAppData, 'pi-node', 'node.exe') : '',
-      join(programFiles, 'nodejs', 'node.exe'),
-      join(programFilesX86, 'nodejs', 'node.exe'),
-      localAppData ? join(localAppData, 'fnm_multishells', 'node.exe') : '',
-    ].filter(Boolean)
-    for (const c of candidates) if (existsSync(c)) return c
-    const fromPath = whichInPath(RESOLUTION_DEPS, 'node', process.env.PATH ?? '')
-    if (fromPath) return fromPath
-    return 'node.exe'
+      localAppData ? join(localAppData, "pi-node", "current", "node.exe") : "",
+      localAppData ? join(localAppData, "pi-node", "node.exe") : "",
+      join(programFiles, "nodejs", "node.exe"),
+      join(programFilesX86, "nodejs", "node.exe"),
+      localAppData ? join(localAppData, "fnm_multishells", "node.exe") : "",
+    ].filter(Boolean);
+    for (const c of candidates) if (existsSync(c)) return c;
+    const fromPath = whichInPath(
+      RESOLUTION_DEPS,
+      "node",
+      process.env.PATH ?? "",
+    );
+    if (fromPath) return fromPath;
+    return "node.exe";
   }
 
-  for (const c of ['/usr/bin/node', '/usr/local/bin/node', '/opt/homebrew/bin/node']) {
-    if (existsSync(c)) return c
+  for (const c of [
+    "/usr/bin/node",
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+  ]) {
+    if (existsSync(c)) return c;
   }
-  const fromPath = whichInPath(RESOLUTION_DEPS, 'node', process.env.PATH ?? '')
-  if (fromPath) return fromPath
-  return 'node'
+  const fromPath = whichInPath(RESOLUTION_DEPS, "node", process.env.PATH ?? "");
+  if (fromPath) return fromPath;
+  return "node";
 }
 
 /**
@@ -291,60 +381,74 @@ function findNodeBinary(): string {
  */
 export interface PiCli {
   /** The selected engine. OMP deliberately keeps the Pi-compatible RPC path. */
-  kind?: 'pi' | 'omp'
-  script: string
-  node: string
-  useNode: boolean
-  needsShell: boolean
-  found: boolean
-  nodeFound: boolean
-  failureReason: string | null
+  kind?: "pi" | "omp";
+  script: string;
+  node: string;
+  useNode: boolean;
+  needsShell: boolean;
+  found: boolean;
+  nodeFound: boolean;
+  failureReason: string | null;
 }
 
 // Resolution is lazy and cached rather than computed at import time, because
 // it depends on the executable path and explicit engine setting, which are only
 // readable once app settings have loaded.
-let configuredOverride: string | null = null
-let configuredEngine: PiEngine = 'auto'
-let cachedResolution: PiResolution | null = null
+let configuredOverride: string | null = null;
+let configuredEngine: PiEngine = "auto";
+let cachedResolution: PiResolution | null = null;
 /**
  * Auto-detected resolution per engine, for starts that must run a specific
  * engine rather than the configured one. Cached and invalidated exactly like
  * `cachedResolution` — both read the same filesystem state.
  */
-const engineResolutions = new Map<AgentEngineKind, PiResolution>()
-let cachedNodeBinary: string | null = null
-let detectedInstallationsCache: { at: number; value: AgentInstallation[] } | null = null
+const engineResolutions = new Map<AgentEngineKind, PiResolution>();
+let cachedNodeBinary: string | null = null;
+let detectedInstallationsCache: {
+  at: number;
+  value: AgentInstallation[];
+} | null = null;
 /** How long a detection result is served without re-walking the filesystem. */
-const INSTALLATION_CACHE_TTL_MS = 30_000
+const INSTALLATION_CACHE_TTL_MS = 30_000;
 /**
  * Apply the selected executable and engine. The engine is persisted separately
  * so a custom path named something other than `omp` cannot silently change the
  * protocol/tool surface.
  */
-export function setPiExecutableOverride(raw: string | undefined | null, engine: PiEngine = 'auto'): void {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? ''
-  const next = normalizeOverride(raw, home)
-  if (next === configuredOverride && engine === configuredEngine && cachedResolution) return
-  configuredOverride = next
-  configuredEngine = engine
-  cachedResolution = null
-  engineResolutions.clear()
-  cachedNodeBinary = null
+export function setPiExecutableOverride(
+  raw: string | undefined | null,
+  engine: PiEngine = "auto",
+): void {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const next = normalizeOverride(raw, home);
+  if (
+    next === configuredOverride &&
+    engine === configuredEngine &&
+    cachedResolution
+  )
+    return;
+  configuredOverride = next;
+  configuredEngine = engine;
+  cachedResolution = null;
+  engineResolutions.clear();
+  cachedNodeBinary = null;
 }
 
-
 function getResolution(): PiResolution {
-  if (cachedResolution) return cachedResolution
-  const resolution = resolvePiBinary(RESOLUTION_DEPS, configuredOverride, configuredEngine)
+  if (cachedResolution) return cachedResolution;
+  const resolution = resolvePiBinary(
+    RESOLUTION_DEPS,
+    configuredOverride,
+    configuredEngine,
+  );
   // Adopt the login shell's PATH process-wide so Pi itself — and every helper
   // we spawn — can find node, npm and the tools the user's shell exposes.
   if (resolution.pathEnv && resolution.pathEnv !== process.env.PATH) {
-    process.env.PATH = resolution.pathEnv
+    process.env.PATH = resolution.pathEnv;
   }
-  cachedResolution = resolution
-  logResolution(resolution)
-  return resolution
+  cachedResolution = resolution;
+  logResolution(resolution);
+  return resolution;
 }
 
 /**
@@ -352,7 +456,7 @@ function getResolution(): PiResolution {
  * diagnostics report. First call may run the login-shell and npm probes.
  */
 export function getPiResolution(): PiResolution {
-  return getResolution()
+  return getResolution();
 }
 
 /**
@@ -363,61 +467,75 @@ export function getPiResolution(): PiResolution {
  * Rescan button into a spinner that can never report a new install.
  */
 export function detectPiInstallations(force = false): AgentInstallation[] {
-  const cached = detectedInstallationsCache
+  const cached = detectedInstallationsCache;
   if (!force && cached && Date.now() - cached.at < INSTALLATION_CACHE_TTL_MS) {
-    return cached.value.map((item) => ({ ...item }))
+    return cached.value.map((item) => ({ ...item }));
   }
-  const candidates: Array<{ kind: AgentInstallation['kind']; resolution: PiResolution }> = [
-    { kind: 'pi', resolution: resolvePiBinary(RESOLUTION_DEPS, null, 'pi') },
-    { kind: 'omp', resolution: resolvePiBinary(RESOLUTION_DEPS, null, 'omp') },
-  ]
-  const seen = new Set<string>()
+  const candidates: Array<{
+    kind: AgentInstallation["kind"];
+    resolution: PiResolution;
+  }> = [
+    { kind: "pi", resolution: resolvePiBinary(RESOLUTION_DEPS, null, "pi") },
+    { kind: "omp", resolution: resolvePiBinary(RESOLUTION_DEPS, null, "omp") },
+  ];
+  const seen = new Set<string>();
   const value = candidates.flatMap(({ kind, resolution }) => {
-    if (!resolution.found) return []
-    const key = resolution.script.toLowerCase()
-    if (seen.has(key)) return []
-    seen.add(key)
-    return [{ kind, path: resolution.script, source: resolution.source }]
-  })
-  detectedInstallationsCache = { at: Date.now(), value }
-  return value.map((item) => ({ ...item }))
+    if (!resolution.found) return [];
+    const key = resolution.script.toLowerCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ kind, path: resolution.script, source: resolution.source }];
+  });
+  detectedInstallationsCache = { at: Date.now(), value };
+  return value.map((item) => ({ ...item }));
 }
 
 function logResolution(resolution: PiResolution): void {
-  const node = getNodeBinary()
-  console.log('─── Pi binary resolution ────────────────────────────')
-  console.log('[Pi] Script        :', resolution.script, resolution.found ? '(exists)' : '(MISSING)')
-  console.log('[Pi] Source        :', resolution.source)
-  if (resolution.rejectedOverride) {
-    console.warn('[Pi] Configured path ignored (does not exist):', resolution.rejectedOverride)
-  }
-  console.log('[Pi] Uses node     :', resolution.useNode)
+  const node = getNodeBinary();
+  console.log("─── Pi binary resolution ────────────────────────────");
   console.log(
-    '[Pi] Node binary   :',
+    "[Pi] Script        :",
+    resolution.script,
+    resolution.found ? "(exists)" : "(MISSING)",
+  );
+  console.log("[Pi] Source        :", resolution.source);
+  if (resolution.rejectedOverride) {
+    console.warn(
+      "[Pi] Configured path ignored (does not exist):",
+      resolution.rejectedOverride,
+    );
+  }
+  console.log("[Pi] Uses node     :", resolution.useNode);
+  console.log(
+    "[Pi] Node binary   :",
     node,
-    resolution.useNode ? (existsSync(node) ? '(exists)' : '(MISSING)') : '(unused)'
-  )
-  console.log('[Pi] Needs shell   :', resolution.needsShell)
-  console.log('─────────────────────────────────────────────────────')
+    resolution.useNode
+      ? existsSync(node)
+        ? "(exists)"
+        : "(MISSING)"
+      : "(unused)",
+  );
+  console.log("[Pi] Needs shell   :", resolution.needsShell);
+  console.log("─────────────────────────────────────────────────────");
 }
 
 function getNodeBinary(): string {
-  if (cachedNodeBinary === null) cachedNodeBinary = findNodeBinary()
-  return cachedNodeBinary
+  if (cachedNodeBinary === null) cachedNodeBinary = findNodeBinary();
+  return cachedNodeBinary;
 }
 
 /** Pair a resolution with the Node binary and the failure text spawn needs. */
 function toPiCli(resolution: PiResolution, kind: AgentEngineKind): PiCli {
-  const node = getNodeBinary()
-  const nodeFound = !resolution.useNode || existsSync(node)
-  let failureReason: string | null = null
+  const node = getNodeBinary();
+  const nodeFound = !resolution.useNode || existsSync(node);
+  let failureReason: string | null = null;
   if (!resolution.found) {
-    failureReason = describePiResolutionFailure(resolution)
+    failureReason = describePiResolutionFailure(resolution);
   } else if (!nodeFound) {
     failureReason =
-      `Node binary not found at resolved path:\n  ${node}\n\n` +
-      "Pi's .js entry point requires Node. Install Node from https://nodejs.org " +
-      'or set the NODE env var to your Node binary path.'
+      `解析到的 Node 可执行文件不存在：\n  ${node}\n\n` +
+      "Pi 的 .js 入口需要 Node。请从 https://nodejs.org 安装 Node，" +
+      "或将 NODE 环境变量设置为 Node 可执行文件路径。";
   }
   return {
     kind,
@@ -428,7 +546,7 @@ function toPiCli(resolution: PiResolution, kind: AgentEngineKind): PiCli {
     found: resolution.found,
     nodeFound,
     failureReason,
-  }
+  };
 }
 
 /**
@@ -437,15 +555,17 @@ function toPiCli(resolution: PiResolution, kind: AgentEngineKind): PiCli {
  * have `pi` on it.
  */
 export function getPiCli(): PiCli {
-  const resolution = getResolution()
+  const resolution = getResolution();
   return toPiCli(
     resolution,
-    configuredEngine === 'omp'
-      ? 'omp'
-      : configuredEngine === 'pi'
-        ? 'pi'
-        : isOmpExecutable(resolution.script) ? 'omp' : 'pi'
-  )
+    configuredEngine === "omp"
+      ? "omp"
+      : configuredEngine === "pi"
+        ? "pi"
+        : isOmpExecutable(resolution.script)
+          ? "omp"
+          : "pi",
+  );
 }
 
 /**
@@ -455,7 +575,7 @@ export function getPiCli(): PiCli {
  * the wrong CLI until the first agent started.
  */
 export function getConfiguredEngineKind(): AgentEngineKind {
-  return getPiCli().kind ?? 'pi'
+  return getPiCli().kind ?? "pi";
 }
 
 /**
@@ -469,19 +589,19 @@ export function getConfiguredEngineKind(): AgentEngineKind {
  * configured one.
  */
 function getPiCliForEngine(engine: AgentEngineKind): PiCli {
-  const configured = getPiCli()
+  const configured = getPiCli();
   // The configured resolution already targets this engine, including any
   // executable path the user set for it.
-  if (configured.kind === engine) return configured
+  if (configured.kind === engine) return configured;
   // A configured override names the OTHER engine's binary, so this engine is
   // auto-detected rather than inheriting a path that is not its own.
-  const cached = engineResolutions.get(engine)
-  if (cached) return toPiCli(cached, engine)
-  const resolution = resolvePiBinary(RESOLUTION_DEPS, null, engine)
+  const cached = engineResolutions.get(engine);
+  if (cached) return toPiCli(cached, engine);
+  const resolution = resolvePiBinary(RESOLUTION_DEPS, null, engine);
   // Only a hit is remembered. Caching "not installed" would keep answering
   // that after the user installs the engine, for the whole run.
-  if (resolution.found) engineResolutions.set(engine, resolution)
-  return toPiCli(resolution, engine)
+  if (resolution.found) engineResolutions.set(engine, resolution);
+  return toPiCli(resolution, engine);
 }
 
 /**
@@ -490,17 +610,17 @@ function getPiCliForEngine(engine: AgentEngineKind): PiCli {
  * always resumes under Pi and an OMP session under OMP.
  */
 export function resolveStartCli(options: PiStartOptions): PiCli {
-  if (!options.engine) return getPiCli()
-  const owner = getPiCliForEngine(options.engine)
-  if (owner.found) return owner
+  if (!options.engine) return getPiCli();
+  const owner = getPiCliForEngine(options.engine);
+  if (owner.found) return owner;
   // The owning engine is not installed. Both engines write the same JSONL, so
   // opening the conversation with the configured engine beats refusing to open
   // it at all; getEngineKind then reports what actually runs.
   appLog.warn(
-    'pi',
-    `Session engine ${options.engine} is not installed; starting the configured engine instead`
-  )
-  return getPiCli()
+    "pi",
+    `Session engine ${options.engine} is not installed; starting the configured engine instead`,
+  );
+  return getPiCli();
 }
 
 /**
@@ -514,37 +634,37 @@ export function resolveStartCli(options: PiStartOptions): PiCli {
  * caller args are appended verbatim.
  */
 export function buildPiArgs(options: PiStartOptions): string[] {
-  const args: string[] = [MODE_FLAG, RPC_MODE]
+  const args: string[] = [MODE_FLAG, RPC_MODE];
 
   if (options.noSession) {
-    args.push(NO_SESSION_FLAG)
+    args.push(NO_SESSION_FLAG);
   }
 
   if (options.provider) {
-    args.push(PROVIDER_FLAG, options.provider)
+    args.push(PROVIDER_FLAG, options.provider);
   }
 
   if (options.model) {
-    args.push(MODEL_FLAG, options.model)
+    args.push(MODEL_FLAG, options.model);
   }
 
   if (options.forkSessionPath) {
-    args.push(FORK_FLAG, options.forkSessionPath)
+    args.push(FORK_FLAG, options.forkSessionPath);
   } else if (options.sessionPath) {
     // Both engines honour an explicit session path, which is what lets a
     // session be resumed out of the store its own engine owns.
-    args.push(SESSION_FLAG, options.sessionPath)
+    args.push(SESSION_FLAG, options.sessionPath);
   } else if (options.continueSession && !options.noSession) {
     // Resume the most recent session for the cwd. Pi falls back to a fresh
     // session when none exists, so this is safe on first run.
-    args.push(CONTINUE_FLAG)
+    args.push(CONTINUE_FLAG);
   }
 
   if (options.args) {
-    args.push(...options.args)
+    args.push(...options.args);
   }
 
-  return args
+  return args;
 }
 
 /**
@@ -564,11 +684,11 @@ export function buildPiInvocation(
 ): { file: string; args: string[] } {
   return cli.useNode
     ? escapeCmdSpawn(cli.needsShell, cli.node, [cli.script, ...args])
-    : escapeCmdSpawn(cli.needsShell, cli.script, args)
+    : escapeCmdSpawn(cli.needsShell, cli.script, args);
 }
 
-const MAX_PENDING_RESPONSES = 64
-const RESPONSE_TIMEOUT_MS = 30_000
+const MAX_PENDING_RESPONSES = 64;
+const RESPONSE_TIMEOUT_MS = 30_000;
 
 /**
  * Writable temp directory for the Pi child process on Windows only. Prefer the
@@ -578,31 +698,31 @@ const RESPONSE_TIMEOUT_MS = 30_000
  */
 function resolvePiChildTempDir(): string {
   try {
-    const dir = getGuiDataPath('tmp')
-    mkdirSync(dir, { recursive: true })
-    return dir
+    const dir = getGuiDataPath("tmp");
+    mkdirSync(dir, { recursive: true });
+    return dir;
   } catch {
     // Fall back to home — still more reliable than a broken Local\Temp ACL.
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd()
-    const dir = join(home, '.pi', 'tmp')
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
+    const dir = join(home, ".pi", "tmp");
     try {
-      mkdirSync(dir, { recursive: true })
+      mkdirSync(dir, { recursive: true });
     } catch {
       // Last resort: leave system TEMP as-is via process.env
     }
-    return dir
+    return dir;
   }
 }
 
 /** Windows-only TEMP/TMP/TMPDIR override for the Pi child. Empty on other OSes. */
 function buildPiChildEnv(): NodeJS.ProcessEnv {
-  if (!IS_WINDOWS) return {}
-  const tmp = resolvePiChildTempDir()
+  if (!IS_WINDOWS) return {};
+  const tmp = resolvePiChildTempDir();
   return {
     TEMP: tmp,
     TMP: tmp,
     TMPDIR: tmp,
-  }
+  };
 }
 
 /**
@@ -610,13 +730,13 @@ function buildPiChildEnv(): NodeJS.ProcessEnv {
  * so pi-subagents / extension scratch does not grow without bound.
  */
 export function cleanupPiChildTempDir(): void {
-  if (!IS_WINDOWS) return
+  if (!IS_WINDOWS) return;
   try {
-    const dir = getGuiDataPath('tmp')
-    if (!existsSync(dir)) return
+    const dir = getGuiDataPath("tmp");
+    if (!existsSync(dir)) return;
     for (const name of readdirSync(dir)) {
       try {
-        rmSync(join(dir, name), { recursive: true, force: true })
+        rmSync(join(dir, name), { recursive: true, force: true });
       } catch {
         // In use or locked — leave for next quit.
       }
@@ -627,31 +747,31 @@ export function cleanupPiChildTempDir(): void {
 }
 
 interface PendingResponse {
-  resolve: (event: PiResponseEvent) => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  resolve: (event: PiResponseEvent) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class PiRpcManager extends EventEmitter {
-  private process: ChildProcess | null = null
-  private status: PiProcessStatus = 'stopped'
-  private stdoutBuffer = ''
-  private stderrBuffer = ''
-  private pendingResponses = new Map<string, PendingResponse>()
-  private nextRequestId = 1
-  private decoder = new StringDecoder('utf8')
-  private rpcFrameDecoder = new RpcFrameDecoder()
-  private startInFlight: Promise<PiStatus> | null = null
-  private runningEngine: 'pi' | 'omp' | null = null
-  private readonly exitWaiters = new Map<ChildProcess, Set<() => void>>()
+  private process: ChildProcess | null = null;
+  private status: PiProcessStatus = "stopped";
+  private stdoutBuffer = "";
+  private stderrBuffer = "";
+  private pendingResponses = new Map<string, PendingResponse>();
+  private nextRequestId = 1;
+  private decoder = new StringDecoder("utf8");
+  private rpcFrameDecoder = new RpcFrameDecoder();
+  private startInFlight: Promise<PiStatus> | null = null;
+  private runningEngine: "pi" | "omp" | null = null;
+  private readonly exitWaiters = new Map<ChildProcess, Set<() => void>>();
   // Set while a spawn attempt awaits readiness; handleLine invokes it when the
   // startup probe's correlated response arrives. Cleared once the attempt settles.
-  private markReady: (() => void) | null = null
+  private markReady: (() => void) | null = null;
   // Settles a pending startup attempt when the process is torn down under it.
   // Without this, stop()/restart() during 'starting' would sever every settle
   // path of spawnAndAwaitReady (kill() removes the child's listeners and the
   // deadline guard is status-gated), leaving start() hung forever.
-  private abortStartup: (() => void) | null = null
+  private abortStartup: (() => void) | null = null;
 
   getStatus(): PiStatus {
     return {
@@ -661,91 +781,100 @@ export class PiRpcManager extends EventEmitter {
       // 'error' state. Pi and its extensions (e.g. pi-ollama) log benign,
       // informational lines to stderr while running — surfacing those as an
       // error misleads the UI into showing healthy startup logs as ERROR.
-      error: this.status === 'error' ? (this.stderrBuffer || null) : null,
+      error: this.status === "error" ? this.stderrBuffer || null : null,
       engine: this.getEngineKind(),
-    }
+    };
   }
   /** Engine identity of the live child, not the currently configured future one. */
   getEngineKind(): AgentEngineKind {
-    return this.runningEngine ?? getConfiguredEngineKind()
+    return this.runningEngine ?? getConfiguredEngineKind();
   }
 
   async start(options: PiStartOptions = {}): Promise<PiStatus> {
-    if (this.status === 'running') {
-      return this.getStatus()
+    if (this.status === "running") {
+      return this.getStatus();
     }
     // Coalesce concurrent starts during the 'starting' window so we never
     // spawn duplicate child processes when two callers race.
     if (this.startInFlight) {
-      return this.startInFlight
+      return this.startInFlight;
     }
 
     this.startInFlight = this.doStart(options).finally(() => {
-      this.startInFlight = null
-    })
-    return this.startInFlight
+      this.startInFlight = null;
+    });
+    return this.startInFlight;
   }
 
   private async doStart(options: PiStartOptions): Promise<PiStatus> {
-    this.kill()
-    this.setStatus('starting')
-    this.stderrBuffer = ''
+    this.kill();
+    this.setStatus("starting");
+    this.stderrBuffer = "";
 
     // Pre-flight: if the binary we resolved doesn't exist, fail fast with a
     // clear message instead of letting spawn die with a cryptic ENOENT.
-    const cli = resolveStartCli(options)
+    const cli = resolveStartCli(options);
     if (cli.failureReason) {
-      this.stderrBuffer = cli.failureReason
-      this.setStatus('error')
-      console.error('[Pi] Pre-flight failed:', this.stderrBuffer)
-      appLog.error('pi', 'Pre-flight failed', this.stderrBuffer)
-      return this.getStatus()
+      this.stderrBuffer = cli.failureReason;
+      this.setStatus("error");
+      console.error("[Pi] Pre-flight failed:", this.stderrBuffer);
+      appLog.error("pi", "Pre-flight failed", this.stderrBuffer);
+      return this.getStatus();
     }
-    if (options.cwd && (!existsSync(options.cwd) || !statSync(options.cwd).isDirectory())) {
-      this.stderrBuffer = `Pi working directory does not exist or is not a directory:\n  ${options.cwd}`
-      this.setStatus('error')
-      console.error('[Pi] Pre-flight failed:', this.stderrBuffer)
-      appLog.error('pi', 'Pre-flight failed', this.stderrBuffer)
-      return this.getStatus()
+    let cwdIsDirectory = true;
+    if (options.cwd) {
+      try {
+        cwdIsDirectory =
+          existsSync(options.cwd) && statSync(options.cwd).isDirectory();
+      } catch {
+        cwdIsDirectory = false;
+      }
+    }
+    if (options.cwd && !cwdIsDirectory) {
+      this.stderrBuffer = `Pi 工作目录不存在或不是目录：\n  ${options.cwd}`;
+      this.setStatus("error");
+      console.error("[Pi] Pre-flight failed:", this.stderrBuffer);
+      appLog.error("pi", "Pre-flight failed", this.stderrBuffer);
+      return this.getStatus();
     }
 
     // Spawn, with one retry reserved for a crash before readiness. See
     // STARTUP_MAX_ATTEMPTS: a crash is often transient; a timeout is not.
     for (let attempt = 1; attempt <= STARTUP_MAX_ATTEMPTS; attempt++) {
-      const outcome = await this.spawnAndAwaitReady(options)
-      if (outcome === 'ready') return this.getStatus()
+      const outcome = await this.spawnAndAwaitReady(options);
+      if (outcome === "ready") return this.getStatus();
 
       // A deliberate stop/restart tore this attempt down; the initiator has
       // already set the status — report it without retrying or erroring.
-      if (outcome === 'aborted') return this.getStatus()
+      if (outcome === "aborted") return this.getStatus();
 
-      if (outcome === 'crashed' && attempt < STARTUP_MAX_ATTEMPTS) {
+      if (outcome === "crashed" && attempt < STARTUP_MAX_ATTEMPTS) {
         console.log(
-          `[Pi] Startup crashed before ready (attempt ${attempt}/${STARTUP_MAX_ATTEMPTS}); retrying once…`
-        )
-        this.kill()
-        this.setStatus('starting')
-        continue
+          `[Pi] Startup crashed before ready (attempt ${attempt}/${STARTUP_MAX_ATTEMPTS}); retrying once…`,
+        );
+        this.kill();
+        this.setStatus("starting");
+        continue;
       }
 
       // Terminal failure — surface a useful error. kill() reaps any hung
       // process; it clears stdout but leaves stderrBuffer intact, so the
       // captured reason survives.
-      const captured = this.stderrBuffer.trim()
-      this.kill()
-      this.setStatus('error')
+      const captured = this.stderrBuffer.trim();
+      this.kill();
+      this.setStatus("error");
       this.stderrBuffer =
-        outcome === 'timeout'
-          ? `Pi did not respond within ${SPAWN_STARTUP_TIMEOUT_MS / 1000}s.\n\n` +
+        outcome === "timeout"
+          ? `Pi 在 ${SPAWN_STARTUP_TIMEOUT_MS / 1000} 秒内没有响应。\n\n` +
             (captured
-              ? `Pi stderr captured during startup:\n${captured}`
-              : 'No output captured. Likely causes: Pi launched but stdio piping is broken (common with shell:true on Windows), or Pi is waiting on input. Try running `pi --mode rpc` directly in cmd to see if RPC mode works standalone.')
-          : captured || 'Pi crashed before becoming ready.'
-      return this.getStatus()
+              ? `启动期间捕获的 Pi stderr：\n${captured}`
+              : "未捕获到输出。可能原因：Pi 已启动但 stdio 管道不可用（Windows 上 shell:true 常见），或 Pi 正在等待输入。请直接在 cmd 中运行 `pi --mode rpc`，确认 RPC 模式是否能独立工作。")
+          : captured || "Pi 在准备就绪前崩溃。";
+      return this.getStatus();
     }
 
     // Unreachable — the loop always returns — but satisfies the type checker.
-    return this.getStatus()
+    return this.getStatus();
   }
 
   /**
@@ -758,13 +887,13 @@ export class PiRpcManager extends EventEmitter {
    * retry a crash without flipping the UI to 'error' between attempts.
    */
   private spawnAndAwaitReady(
-    options: PiStartOptions
-  ): Promise<'ready' | 'crashed' | 'timeout' | 'aborted'> {
-    const args = buildPiArgs(options)
-    const cli = resolveStartCli(options)
+    options: PiStartOptions,
+  ): Promise<"ready" | "crashed" | "timeout" | "aborted"> {
+    const args = buildPiArgs(options);
+    const cli = resolveStartCli(options);
 
     const spawnOptions: SpawnOptions = {
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ["pipe", "pipe", "pipe"],
       cwd: options.cwd,
       // Windows only: redirect TEMP so pi-subagents can mkdir without EPERM on
       // locked %LocalAppData%\Temp trees. POSIX keeps the system temp (OS cleanup).
@@ -776,106 +905,132 @@ export class PiRpcManager extends EventEmitter {
       // negative-PID group kill reaps Pi and all its descendants. Skipped on
       // Windows, where it would spawn a detached console window with shell:true.
       detached: !IS_WINDOWS,
-    }
+    };
 
-    let proc: ChildProcess
+    let proc: ChildProcess;
     try {
       // Escaping happens inside the try so a path or argument cmd.exe cannot
       // carry fails this attempt like any other spawn failure ('crashed'),
       // instead of throwing out of start().
-      const invocation = buildPiInvocation(cli, args)
-      console.log('[Pi] Spawning with cwd:', options.cwd)
-      console.log('[Pi] Spawn argv     :', [invocation.file, ...invocation.args])
-      proc = spawn(invocation.file, invocation.args, spawnOptions)
+      const invocation = buildPiInvocation(cli, args);
+      console.log("[Pi] Spawning with cwd:", options.cwd);
+      console.log("[Pi] Spawn argv     :", [
+        invocation.file,
+        ...invocation.args,
+      ]);
+      proc = spawn(invocation.file, invocation.args, spawnOptions);
     } catch (err) {
-      this.stderrBuffer += (err instanceof Error ? err.message : String(err)) + '\n'
-      return Promise.resolve('crashed')
+      this.stderrBuffer = appendBoundedTail(
+        this.stderrBuffer,
+        (err instanceof Error ? err.message : String(err)) + "\n",
+      );
+      return Promise.resolve("crashed");
     }
-    this.process = proc
-    this.runningEngine = cli.kind ?? 'pi'
-    this.setupStreams()
+    this.process = proc;
+    this.runningEngine = cli.kind ?? "pi";
+    this.setupStreams();
 
-    return new Promise<'ready' | 'crashed' | 'timeout' | 'aborted'>((resolve) => {
-      let settled = false
-      let probeTimer: NodeJS.Timeout | null = null
-      const startedAt = Date.now()
-      const finish = (outcome: 'ready' | 'crashed' | 'timeout' | 'aborted'): void => {
-        if (settled) return
-        settled = true
-        this.markReady = null
-        this.abortStartup = null
-        if (probeTimer) {
-          clearInterval(probeTimer)
-          probeTimer = null
-        }
-        resolve(outcome)
-      }
-      // Deliberate teardown (stop/restart) while starting: settle without
-      // retrying and without stamping an error — the caller chose to stop.
-      this.abortStartup = (): void => finish('aborted')
+    return new Promise<"ready" | "crashed" | "timeout" | "aborted">(
+      (resolve) => {
+        let settled = false;
+        let probeTimer: NodeJS.Timeout | null = null;
+        const startedAt = Date.now();
+        const finish = (
+          outcome: "ready" | "crashed" | "timeout" | "aborted",
+        ): void => {
+          if (settled) return;
+          settled = true;
+          this.markReady = null;
+          this.abortStartup = null;
+          if (probeTimer) {
+            clearInterval(probeTimer);
+            probeTimer = null;
+          }
+          resolve(outcome);
+        };
+        // Deliberate teardown (stop/restart) while starting: settle without
+        // retrying and without stamping an error — the caller chose to stop.
+        this.abortStartup = (): void => finish("aborted");
 
-      // Readiness signal: handleLine invokes this when the probe's correlated
-      // response (success OR "unknown command" error) arrives — proof the
-      // request→response loop is live.
-      this.markReady = (): void => {
-        if (this.status === 'starting') {
-          console.log(`[Pi] Ready after ${Date.now() - startedAt}ms`)
-          this.setStatus('running')
-        }
-        finish('ready')
-      }
+        // Readiness signal: handleLine invokes this when the probe's correlated
+        // response (success OR "unknown command" error) arrives — proof the
+        // request→response loop is live.
+        this.markReady = (): void => {
+          if (this.status === "starting") {
+            console.log(`[Pi] Ready after ${Date.now() - startedAt}ms`);
+            this.setStatus("running");
+          }
+          finish("ready");
+        };
 
-      proc.on('error', (err) => {
-        console.error('[Pi] Spawn error:', err.message)
-        appLog.error('pi', 'Spawn error', err)
-        this.stderrBuffer += `Spawn error: ${err.message}\n`
-        finish('crashed')
-      })
+        proc.on("error", (err) => {
+          console.error("[Pi] Spawn error:", err.message);
+          appLog.error("pi", "Spawn error", err);
+          this.stderrBuffer = appendBoundedTail(
+            this.stderrBuffer,
+            `Spawn error: ${err.message}\n`,
+          );
+          finish("crashed");
+        });
 
-      proc.on('exit', (code, signal) => {
-        console.log('[Pi] Process exited with code:', code, 'signal:', signal, 'pid:', proc.pid)
-        if (this.status === 'running') {
-          // Exited after becoming ready → normal lifecycle stop.
-          this.setStatus('stopped')
-          this.emit('exit', { code, signal })
-          this.rejectAllPending('Pi process exited')
-          return
-        }
-        // Exited before ready → a startup crash (doStart may retry once).
-        if (code !== 0 && code !== null) {
-          this.stderrBuffer = (this.stderrBuffer || '') + `Pi exited with code ${code} before becoming ready.`
-        }
-        finish('crashed')
-      })
+        proc.on("exit", (code, signal) => {
+          console.log(
+            "[Pi] Process exited with code:",
+            code,
+            "signal:",
+            signal,
+            "pid:",
+            proc.pid,
+          );
+          if (this.status === "running") {
+            // Exited after becoming ready → normal lifecycle stop.
+            this.setStatus("stopped");
+            this.emit("exit", { code, signal });
+            this.rejectAllPending("Pi process exited");
+            return;
+          }
+          // Exited before ready → a startup crash (doStart may retry once).
+          if (code !== 0 && code !== null) {
+            this.stderrBuffer = appendBoundedTail(
+              this.stderrBuffer,
+              `Pi exited with code ${code} before becoming ready.`,
+            );
+          }
+          finish("crashed");
+        });
 
-      // Send the readiness probe, resent on an interval in case the first write
-      // raced Pi's stdin reader (Pi doesn't read stdin until its session is
-      // bound, so early writes just buffer harmlessly until then).
-      const sendProbe = (): void => {
-        if (this.status !== 'starting') return
-        try {
-          this.process?.stdin?.write(
-            JSON.stringify({ type: STARTUP_PROBE_COMMAND, id: STARTUP_PROBE_ID }) + JSONL_NEWLINE
-          )
-        } catch {
-          // stdin not writable yet / EPIPE — a resend or the exit handler covers it.
-        }
-      }
-      sendProbe()
-      probeTimer = setInterval(sendProbe, STARTUP_PROBE_INTERVAL_MS)
+        // Send the readiness probe, resent on an interval in case the first write
+        // raced Pi's stdin reader (Pi doesn't read stdin until its session is
+        // bound, so early writes just buffer harmlessly until then).
+        const sendProbe = (): void => {
+          if (this.status !== "starting") return;
+          try {
+            this.process?.stdin?.write(
+              JSON.stringify({
+                type: STARTUP_PROBE_COMMAND,
+                id: STARTUP_PROBE_ID,
+              }) + JSONL_NEWLINE,
+            );
+          } catch {
+            // stdin not writable yet / EPIPE — a resend or the exit handler covers it.
+          }
+        };
+        sendProbe();
+        probeTimer = setInterval(sendProbe, STARTUP_PROBE_INTERVAL_MS);
 
-      // Hard deadline: give up if still 'starting' after the full timeout.
-      setTimeout(() => {
-        if (!settled && this.status === 'starting') {
-          finish('timeout')
-        }
-      }, SPAWN_STARTUP_TIMEOUT_MS)
-    })
+        // Hard deadline: give up if still 'starting' after the full timeout.
+        setTimeout(() => {
+          if (!settled && this.status === "starting") {
+            finish("timeout");
+          }
+        }, SPAWN_STARTUP_TIMEOUT_MS);
+      },
+    );
   }
 
   stop(): void {
-    this.kill()
-    this.setStatus('stopped')
+    this.kill();
+    this.setStatus("stopped");
   }
 
   /**
@@ -883,91 +1038,97 @@ export class PiRpcManager extends EventEmitter {
    * Ordinary stop() remains fire-and-forget for UI navigation.
    */
   async stopAndWait(timeoutMs = FORCE_KILL_TIMEOUT_MS + 500): Promise<void> {
-    const proc = this.process
+    const proc = this.process;
     if (!proc) {
-      this.stop()
-      return
+      this.stop();
+      return;
     }
     await new Promise<void>((resolvePromise) => {
-      let settled = false
-      let timer: ReturnType<typeof setTimeout> | undefined
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        const waiters = this.exitWaiters.get(proc)
-        waiters?.delete(finish)
-        if (waiters && waiters.size === 0) this.exitWaiters.delete(proc)
-        resolvePromise()
-      }
-      const waiters = this.exitWaiters.get(proc) ?? new Set<() => void>()
-      waiters.add(finish)
-      this.exitWaiters.set(proc, waiters)
-      this.stop()
-      if (proc.exitCode !== null || proc.signalCode !== null) finish()
-      else timer = setTimeout(finish, timeoutMs)
-    })
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const waiters = this.exitWaiters.get(proc);
+        waiters?.delete(finish);
+        if (waiters && waiters.size === 0) this.exitWaiters.delete(proc);
+        resolvePromise();
+      };
+      const waiters = this.exitWaiters.get(proc) ?? new Set<() => void>();
+      waiters.add(finish);
+      this.exitWaiters.set(proc, waiters);
+      this.stop();
+      if (proc.exitCode !== null || proc.signalCode !== null) finish();
+      else timer = setTimeout(finish, timeoutMs);
+    });
   }
 
   restart(options: PiStartOptions = {}): Promise<PiStatus> {
-    this.kill()
-    return this.start(options)
+    this.kill();
+    return this.start(options);
   }
 
   /**
    * Send a command to the Pi RPC process.
    * Returns a correlated response if an id is provided.
    */
-  async sendCommand(command: Record<string, unknown>): Promise<PiResponseEvent | null> {
-    if (!this.process?.stdin || this.status !== 'running') {
-      throw new Error('Pi process is not running')
+  async sendCommand(
+    command: Record<string, unknown>,
+  ): Promise<PiResponseEvent | null> {
+    if (!this.process?.stdin || this.status !== "running") {
+      throw new Error("Pi process is not running");
     }
 
-    const id = `req-${this.nextRequestId++}`
-    const cmdWithId = { ...command, id }
-    const line = JSON.stringify(cmdWithId) + JSONL_NEWLINE
+    const id = `req-${this.nextRequestId++}`;
+    const cmdWithId = { ...command, id };
+    const line = JSON.stringify(cmdWithId) + JSONL_NEWLINE;
 
     return new Promise<PiResponseEvent | null>((resolve, reject) => {
       // Check capacity BEFORE allocating a slot so the limit is exact.
       if (this.pendingResponses.size >= MAX_PENDING_RESPONSES) {
-        reject(new Error('Too many pending responses'))
-        return
+        reject(new Error("Too many pending responses"));
+        return;
       }
 
       const timer = setTimeout(() => {
-        this.pendingResponses.delete(id)
-        reject(new Error(`Command ${command.type} timed out after ${RESPONSE_TIMEOUT_MS}ms`))
-      }, RESPONSE_TIMEOUT_MS)
+        this.pendingResponses.delete(id);
+        reject(
+          new Error(
+            `Command ${command.type} timed out after ${RESPONSE_TIMEOUT_MS}ms`,
+          ),
+        );
+      }, RESPONSE_TIMEOUT_MS);
 
-      this.pendingResponses.set(id, { resolve, reject, timer })
+      this.pendingResponses.set(id, { resolve, reject, timer });
 
       this.process!.stdin!.write(line, (err) => {
         if (err) {
-          clearTimeout(timer)
-          this.pendingResponses.delete(id)
-          reject(err)
+          clearTimeout(timer);
+          this.pendingResponses.delete(id);
+          reject(err);
         }
-      })
-    })
+      });
+    });
   }
 
   /**
    * Send a command without waiting for a correlated response.
    */
   sendCommandFireAndForget(command: Record<string, unknown>): void {
-    if (!this.process?.stdin || this.status !== 'running') {
-      return // Silently ignore if Pi isn't running
+    if (!this.process?.stdin || this.status !== "running") {
+      return; // Silently ignore if Pi isn't running
     }
 
-    const line = JSON.stringify(command) + JSONL_NEWLINE
+    const line = JSON.stringify(command) + JSONL_NEWLINE;
     try {
-      this.process.stdin.write(line)
+      this.process.stdin.write(line);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'EPIPE') {
-        throw err
+      if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+        throw err;
       }
       // EPIPE means Pi process exited
-      this.setStatus('stopped')
+      this.setStatus("stopped");
     }
   }
 
@@ -976,122 +1137,148 @@ export class PiRpcManager extends EventEmitter {
    */
   sendExtensionUiResponse(id: string, response: Record<string, unknown>): void {
     this.sendCommandFireAndForget({
-      type: 'extension_ui_response',
+      type: "extension_ui_response",
       id,
       ...response,
-    })
+    });
   }
 
   private setupStreams(): void {
-    if (!this.process) return
+    if (!this.process) return;
 
-    // stdout: JSONL events
-    this.process.stdout?.on('data', (chunk: Buffer) => {
-      this.stdoutBuffer += this.decoder.write(chunk)
+    const consumeStdout = (text: string, final = false): void => {
+      this.stdoutBuffer += text;
 
       while (true) {
-        const newlineIndex = this.stdoutBuffer.indexOf('\n')
-        if (newlineIndex === -1) break
+        const newlineIndex = this.stdoutBuffer.indexOf("\n");
+        if (newlineIndex === -1) break;
 
-        let line = this.stdoutBuffer.slice(0, newlineIndex)
-        this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1)
+        let line = this.stdoutBuffer.slice(0, newlineIndex);
+        this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line.length === 0) continue;
 
-        // Strip optional \r
-        if (line.endsWith('\r')) {
-          line = line.slice(0, -1)
+        if (Buffer.byteLength(line, "utf8") > RPC_MAX_LINE_BYTES) {
+          this.rpcFrameDecoder.reset();
+          this.emit("parse-error", "[oversized rpc line discarded]");
+          continue;
         }
+        this.handleLine(line);
+      }
 
+      if (final && this.stdoutBuffer.length > 0) {
+        const line = this.stdoutBuffer.endsWith("\r")
+          ? this.stdoutBuffer.slice(0, -1)
+          : this.stdoutBuffer;
+        this.stdoutBuffer = "";
         if (line.length > 0) {
-          this.handleLine(line)
+          if (Buffer.byteLength(line, "utf8") > RPC_MAX_LINE_BYTES) {
+            this.rpcFrameDecoder.reset();
+            this.emit("parse-error", "[oversized rpc line discarded]");
+          } else {
+            this.handleLine(line);
+          }
         }
+      } else if (
+        Buffer.byteLength(this.stdoutBuffer, "utf8") > RPC_MAX_LINE_BYTES
+      ) {
+        // Without a newline a child could otherwise grow this buffer forever.
+        this.stdoutBuffer = "";
+        this.rpcFrameDecoder.reset();
+        this.emit("parse-error", "[oversized rpc line discarded]");
       }
-    })
+    };
 
-    this.process.stdout?.on('end', () => {
-      this.stdoutBuffer += this.decoder.end()
-      if (this.stdoutBuffer.length > 0) {
-        let line = this.stdoutBuffer
-        if (line.endsWith('\r')) line = line.slice(0, -1)
-        if (line.length > 0) this.handleLine(line)
-      }
-      this.stdoutBuffer = ''
-    })
+    // stdout: JSONL events
+    this.process.stdout?.on("data", (chunk: Buffer) => {
+      consumeStdout(this.decoder.write(chunk));
+    });
 
-    // stderr: capture for diagnostics
-    this.process.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf8')
-      this.stderrBuffer += text
-      this.emit('stderr', text)
-      console.log('[Pi STDERR]:', text.slice(0, 200))
-    })
+    this.process.stdout?.on("end", () => {
+      consumeStdout(this.decoder.end(), true);
+    });
+
+    // stderr: capture for diagnostics, retaining only the most recent tail.
+    this.process.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      this.stderrBuffer = appendBoundedTail(this.stderrBuffer, text);
+      this.emit("stderr", text);
+      console.log("[Pi STDERR]:", text.slice(0, 200));
+    });
   }
 
   private handleLine(line: string): void {
-    let parsed: unknown
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(line)
+      parsed = JSON.parse(line);
       if (isRpcChunkFrame(parsed)) {
-        parsed = this.rpcFrameDecoder.push(parsed)
-        if (parsed === undefined) return
+        parsed = this.rpcFrameDecoder.push(parsed);
+        if (parsed === undefined) return;
       } else if (this.rpcFrameDecoder.hasPending()) {
-        throw new Error('rpc chunk sequence interrupted')
+        throw new Error("rpc chunk sequence interrupted");
       }
     } catch {
-      this.rpcFrameDecoder.reset()
-      this.emit('parse-error', line)
-      return
+      this.rpcFrameDecoder.reset();
+      this.emit("parse-error", line);
+      return;
     }
-    const event = parsed as PiRpcEvent
+    const event = parsed as PiRpcEvent;
 
     // OMP advertises readiness explicitly. Keep the probe fallback for the
     // original Pi RPC implementation, which has no ready frame.
-    if ((event as { type?: unknown }).type === 'ready') {
-      this.markReady?.()
+    if ((event as { type?: unknown }).type === "ready") {
+      this.markReady?.();
       const ready = event as {
-        supportedProtocolVersions?: unknown
-        maxFrameBytes?: unknown
-        maxReassembledFrameBytes?: unknown
-      }
+        supportedProtocolVersions?: unknown;
+        maxFrameBytes?: unknown;
+        maxReassembledFrameBytes?: unknown;
+      };
       // Adopt the engine's own framing limits before v2 traffic can arrive, so
       // the decoder never rejects a frame the sender considers legal.
-      this.rpcFrameDecoder.configureLimits(ready)
-      if (Array.isArray(ready.supportedProtocolVersions) && ready.supportedProtocolVersions.includes(2)) {
-        void this.sendCommand({ type: 'negotiate_protocol', protocolVersion: 2 }).catch(() => {})
+      this.rpcFrameDecoder.configureLimits(ready);
+      if (
+        Array.isArray(ready.supportedProtocolVersions) &&
+        ready.supportedProtocolVersions.includes(2)
+      ) {
+        void this.sendCommand({
+          type: "negotiate_protocol",
+          protocolVersion: 2,
+        }).catch(() => {});
       }
-      return
+      return;
     }
 
     // Correlate responses with pending requests
-    if (event.type === 'response') {
-      const responseEvent = event as PiResponseEvent
+    if (event.type === "response") {
+      const responseEvent = event as PiResponseEvent;
       // Startup readiness probe (see spawnAndAwaitReady): its correlated
       // response — success OR an "unknown command" error, both echoing our id —
       // means Pi is answering RPC. Flip to ready, then consume it silently so
       // it never surfaces as a stray event.
       if (responseEvent.id === STARTUP_PROBE_ID) {
-        this.markReady?.()
-        return
+        this.markReady?.();
+        return;
       }
       if (responseEvent.id) {
-        const pending = this.pendingResponses.get(responseEvent.id)
+        const pending = this.pendingResponses.get(responseEvent.id);
         if (pending) {
-          clearTimeout(pending.timer)
-          this.pendingResponses.delete(responseEvent.id)
-          pending.resolve(responseEvent)
-          return
+          clearTimeout(pending.timer);
+          this.pendingResponses.delete(responseEvent.id);
+          pending.resolve(responseEvent);
+          return;
         }
       }
     }
 
     // Emit all events for subscribers
-    this.emit('event', event)
-    this.emit(event.type, event)
+    this.emit("event", event);
+    this.emit(event.type, event);
   }
 
   private setStatus(status: PiProcessStatus): void {
     if (this.status !== status) {
-      this.status = status
-      this.emit('status-change', status)
+      this.status = status;
+      this.emit("status-change", status);
     }
   }
 
@@ -1108,106 +1295,119 @@ export class PiRpcManager extends EventEmitter {
    * it cannot be verified from here, so that path is left as it was.
    */
   private descendantPids(root: number): number[] {
-    if (IS_WINDOWS) return []
-    const result = spawnSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf-8', timeout: PROCESS_TREE_TIMEOUT_MS })
-    if (result.status !== 0 || typeof result.stdout !== 'string') return []
+    if (IS_WINDOWS) return [];
+    const result = spawnSync("ps", ["-eo", "pid=,ppid="], {
+      encoding: "utf-8",
+      timeout: PROCESS_TREE_TIMEOUT_MS,
+    });
+    if (result.status !== 0 || typeof result.stdout !== "string") return [];
 
-    const childrenByParent = new Map<number, number[]>()
-    for (const line of result.stdout.split('\n')) {
-      const [pid, ppid] = line.trim().split(/\s+/).map(Number)
-      if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue
-      const siblings = childrenByParent.get(ppid)
-      if (siblings) siblings.push(pid)
-      else childrenByParent.set(ppid, [pid])
+    const childrenByParent = new Map<number, number[]>();
+    for (const line of result.stdout.split("\n")) {
+      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+      if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
+      const siblings = childrenByParent.get(ppid);
+      if (siblings) siblings.push(pid);
+      else childrenByParent.set(ppid, [pid]);
     }
 
-    const found: number[] = []
-    const queue = [root]
+    const found: number[] = [];
+    const queue = [root];
     // Breadth-first with a seen set: a malformed table must not loop forever.
-    const seen = new Set<number>([root])
+    const seen = new Set<number>([root]);
     while (queue.length > 0) {
       for (const child of childrenByParent.get(queue.shift()!) ?? []) {
-        if (seen.has(child)) continue
-        seen.add(child)
-        found.push(child)
-        queue.push(child)
+        if (seen.has(child)) continue;
+        seen.add(child);
+        found.push(child);
+        queue.push(child);
       }
     }
-    return found
+    return found;
   }
 
   private kill(): void {
     // Settle any pending startup attempt first — after the listener teardown
     // below it could never settle on its own. No-op when already settled.
-    this.abortStartup?.()
+    this.abortStartup?.();
     for (const [, pending] of this.pendingResponses) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error('Pi process killed'))
+      clearTimeout(pending.timer);
+      pending.reject(new Error("Pi process killed"));
     }
-    this.pendingResponses.clear()
+    this.pendingResponses.clear();
 
     if (this.process) {
-      const proc = this.process
-      proc.removeAllListeners()
-      proc.stdout?.removeAllListeners()
-      proc.stderr?.removeAllListeners()
-      const waiters = this.exitWaiters.get(proc)
+      const proc = this.process;
+      proc.removeAllListeners();
+      proc.stdout?.removeAllListeners();
+      proc.stderr?.removeAllListeners();
+      const waiters = this.exitWaiters.get(proc);
       if (waiters?.size) {
         const settle = (): void => {
-          this.exitWaiters.delete(proc)
-          for (const waiter of waiters) waiter()
-        }
-        proc.once('exit', settle)
-        proc.once('close', settle)
+          this.exitWaiters.delete(proc);
+          for (const waiter of waiters) waiter();
+        };
+        proc.once("exit", settle);
+        proc.once("close", settle);
       }
-      proc.stdin?.end()
+      proc.stdin?.end();
 
       // Snapshot the tree before signalling: once the parent dies its children
       // are re-parented to init and can no longer be found from this pid.
-      const strays = proc.pid ? this.descendantPids(proc.pid) : []
+      const strays = proc.pid ? this.descendantPids(proc.pid) : [];
 
       // Kill entire process group (negative PID)
       try {
         if (proc.pid) {
-          process.kill(-proc.pid, 'SIGTERM')
+          process.kill(-proc.pid, "SIGTERM");
         }
       } catch {
-        proc.kill('SIGTERM')
+        proc.kill("SIGTERM");
       }
 
       // Subagents sit in their own groups, so the group signal above misses
       // them. Signal each directly; ESRCH just means it already exited.
       for (const stray of strays) {
-        try { process.kill(stray, 'SIGTERM') } catch { /* already gone */ }
+        try {
+          process.kill(stray, "SIGTERM");
+        } catch {
+          /* already gone */
+        }
       }
 
       // Force kill after timeout
       setTimeout(() => {
         try {
-          if (proc.pid && !proc.killed) {
-            process.kill(-proc.pid, 'SIGKILL')
-          }
+          if (proc.pid) process.kill(-proc.pid, "SIGKILL");
         } catch {
-          try { proc.kill('SIGKILL') } catch { /* already dead */ }
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            /* already dead */
+          }
         }
         for (const stray of strays) {
-          try { process.kill(stray, 'SIGKILL') } catch { /* already gone */ }
+          try {
+            process.kill(stray, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
         }
-      }, FORCE_KILL_TIMEOUT_MS)
+      }, FORCE_KILL_TIMEOUT_MS);
 
-      this.process = null
+      this.process = null;
     }
 
-    this.stdoutBuffer = ''
-    this.decoder = new StringDecoder('utf8')
-    this.rpcFrameDecoder = new RpcFrameDecoder()
+    this.stdoutBuffer = "";
+    this.decoder = new StringDecoder("utf8");
+    this.rpcFrameDecoder = new RpcFrameDecoder();
   }
 
   private rejectAllPending(reason: string): void {
     for (const [, pending] of this.pendingResponses) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error(reason))
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
     }
-    this.pendingResponses.clear()
+    this.pendingResponses.clear();
   }
 }

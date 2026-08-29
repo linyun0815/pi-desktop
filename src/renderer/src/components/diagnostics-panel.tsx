@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { clsx } from 'clsx'
+import { useCallback, useEffect, useState } from "react";
+import { clsx } from "clsx";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -7,63 +7,73 @@ import {
   RefreshCw,
   Stethoscope,
   XCircle,
-} from 'lucide-react'
-import type { AppLogEntry, DiagnosticsReport } from '../../../shared/ipc-contracts'
-import { useAppStore } from '../store'
-import { DEFAULT_AGENT_ENGINE_LABEL, agentEngineLabel } from '../../../shared/agent-engine-label'
-import { formatRelativeTime } from '../utils/format-relative-time'
-import { formatIpcError } from '../utils/ipc-error'
-import { CopyButton } from './copy-button'
+} from "lucide-react";
+import type {
+  AppLogEntry,
+  DiagnosticsReport,
+} from "../../../shared/ipc-contracts";
+import { useAppStore } from "../store";
+import {
+  DEFAULT_AGENT_ENGINE_LABEL,
+  agentEngineLabel,
+} from "../../../shared/agent-engine-label";
+import { formatRelativeTime } from "../utils/format-relative-time";
+import { formatUiError, localizeIpcErrorMessage } from "../utils/ipc-error";
+import { CopyButton } from "./copy-button";
+import { localizedStatus } from "../utils/ui-text";
+import { getPermissionModeLabel } from "./permission-mode";
 
-type RowTone = 'ok' | 'warn' | 'fail' | 'plain'
+type RowTone = "ok" | "warn" | "fail" | "plain";
 
-const TONE_TEXT: Record<Exclude<RowTone, 'plain'>, string> = {
-  ok: 'text-success',
-  warn: 'text-warning',
-  fail: 'text-error',
-}
+const TONE_TEXT: Record<Exclude<RowTone, "plain">, string> = {
+  ok: "text-success",
+  warn: "text-warning",
+  fail: "text-error",
+};
 
 /** Newest log entries shown in the Recent Errors section. */
-const MAX_VISIBLE_LOG_ENTRIES = 30
+const MAX_VISIBLE_LOG_ENTRIES = 30;
 
 const KEY_STATE_LABELS: Record<string, { label: string; tone: RowTone }> = {
-  literal: { label: 'key configured', tone: 'ok' },
-  'env-set': { label: 'env var set', tone: 'ok' },
-  'env-missing': { label: 'env var missing', tone: 'fail' },
-  shell: { label: 'shell command', tone: 'plain' },
-  none: { label: 'no key', tone: 'plain' },
-}
+  literal: { label: "已配置密钥", tone: "ok" },
+  "env-set": { label: "已设置环境变量", tone: "ok" },
+  "env-missing": { label: "缺少环境变量", tone: "fail" },
+  shell: { label: "Shell 命令", tone: "plain" },
+  none: { label: "无密钥", tone: "plain" },
+};
 
 export function DiagnosticsPanel(): React.JSX.Element {
-  const [report, setReport] = useState<DiagnosticsReport | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [report, setReport] = useState<DiagnosticsReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   // The report describes whichever CLI resolved, so labelling it "Pi version"
   // while OMP is configured reports the wrong program's version number.
-  const engineLabel = useAppStore((state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL)
+  const engineLabel = useAppStore(
+    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
+  );
 
   const load = useCallback(async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      setReport(await window.piDesktop.diagnostics.get())
-      setLoadError(null)
+      setReport(await window.piDesktop.diagnostics.get());
+      setLoadError(null);
     } catch (err) {
-      setLoadError(formatIpcError(err))
+      setLoadError(formatUiError(err));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    void load()
-  }, [load])
+    void load();
+  }, [load]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Stethoscope size={16} className="text-muted" />
-          <h2 className="text-sm font-medium text-primary">Diagnostics</h2>
+          <h2 className="text-sm font-medium text-primary">诊断</h2>
         </div>
         <div className="flex items-center gap-2">
           {report && (
@@ -74,8 +84,8 @@ export function DiagnosticsPanel(): React.JSX.Element {
           )}
           <button
             onClick={() => void load()}
-            title="Refresh"
-            aria-label="Refresh diagnostics"
+            title="刷新"
+            aria-label="刷新诊断"
             className="rounded p-1.5 text-dim hover:bg-surface-hover hover:text-secondary transition-colors"
           >
             <RefreshCw size={14} />
@@ -91,26 +101,28 @@ export function DiagnosticsPanel(): React.JSX.Element {
         ) : loadError !== null ? (
           <div className="flex flex-col items-center justify-center py-12 text-dim">
             <AlertTriangle size={32} className="mb-3 text-warning" />
-            <p className="text-sm text-secondary">Couldn't build the report</p>
-            <p className="mt-1 max-w-md break-words px-4 text-center text-xs text-faint">{loadError}</p>
+            <p className="text-sm text-secondary">无法生成诊断报告</p>
+            <p className="mt-1 max-w-md break-words px-4 text-center text-xs text-faint">
+              {loadError}
+            </p>
             <button
               onClick={() => void load()}
               className="mt-3 rounded bg-card px-3 py-1 text-xs text-secondary transition-colors hover:bg-surface-hover"
             >
-              Retry
+              重试
             </button>
           </div>
         ) : report ? (
           <div className="mx-auto max-w-3xl space-y-6">
-            <DiagSection title="Application">
-              <DiagRow label="App version" value={report.app.version} />
+            <DiagSection title="应用">
+              <DiagRow label="应用版本" value={report.app.version} />
               <DiagRow label="Electron" value={report.app.electron} />
               <DiagRow label="Chromium" value={report.app.chrome} />
               <DiagRow label="Node" value={report.app.node} />
-              <DiagRow label="Platform" value={report.app.platform} />
+              <DiagRow label="平台" value={report.app.platform} />
             </DiagSection>
 
-            <DiagSection title={`${engineLabel} Binary`}>
+            <DiagSection title={`${engineLabel} 可执行文件`}>
               {report.piBinary.failureReason && (
                 <div className="mb-2 whitespace-pre-wrap rounded-md border border-border bg-error-bg px-3 py-2 text-xs text-error">
                   {report.piBinary.failureReason}
@@ -118,133 +130,197 @@ export function DiagnosticsPanel(): React.JSX.Element {
               )}
               {report.piBinary.rejectedOverride && (
                 <div className="mb-2 rounded-md border border-border bg-warning-bg px-3 py-2 text-xs text-warning">
-                  Configured path ignored (does not exist): {report.piBinary.rejectedOverride}
+                  已忽略配置的路径（不存在）：{report.piBinary.rejectedOverride}
                 </div>
               )}
               <DiagRow
-                label="Binary found"
-                value={report.piBinary.found ? 'yes' : 'no'}
-                tone={report.piBinary.found ? 'ok' : 'fail'}
+                label="找到可执行文件"
+                value={report.piBinary.found ? "是" : "否"}
+                tone={report.piBinary.found ? "ok" : "fail"}
               />
-              <DiagRow label={`${engineLabel} version`} value={report.piVersion ?? 'unknown'} tone={report.piVersion ? 'plain' : 'warn'} />
-              <DiagRow label="Script" value={report.piBinary.script} mono />
-              <DiagRow label="Resolution source" value={report.piBinary.source} />
+              <DiagRow
+                label={`${engineLabel} 版本`}
+                value={report.piVersion ?? "未知"}
+                tone={report.piVersion ? "plain" : "warn"}
+              />
+              <DiagRow label="脚本" value={report.piBinary.script} mono />
+              <DiagRow label="解析来源" value={report.piBinary.source} />
               {report.piBinary.useNode && (
                 <DiagRow
-                  label="Node binary"
+                  label="Node 可执行文件"
                   value={report.piBinary.nodeBinary}
                   mono
-                  tone={report.piBinary.nodeFound ? 'plain' : 'fail'}
+                  tone={report.piBinary.nodeFound ? "plain" : "fail"}
                 />
               )}
-              <DiagRow label="Needs shell" value={report.piBinary.needsShell ? 'yes' : 'no'} />
-              <DiagRow label="PATH entries searched" value={String(report.piBinary.pathEntryCount)} />
+              <DiagRow
+                label="需要 Shell"
+                value={report.piBinary.needsShell ? "是" : "否"}
+              />
+              <DiagRow
+                label="已搜索 PATH 条目"
+                value={String(report.piBinary.pathEntryCount)}
+              />
             </DiagSection>
 
-            <DiagSection title="Workspaces">
+            <DiagSection title="工作区">
               {report.workspaces.length === 0 ? (
-                <p className="text-xs text-dim">No workspaces.</p>
+                <p className="text-xs text-dim">暂无工作区。</p>
               ) : (
                 report.workspaces.map((ws) => (
-                  <div key={ws.id} className="flex items-center gap-2 py-1 text-xs">
-                    <StatusGlyph tone={ws.pathExists ? 'ok' : 'fail'} />
+                  <div
+                    key={ws.id}
+                    className="flex items-center gap-2 py-1 text-xs"
+                  >
+                    <StatusGlyph tone={ws.pathExists ? "ok" : "fail"} />
                     <span className="shrink-0 text-secondary">{ws.name}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-faint" title={ws.path}>
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-faint"
+                      title={ws.path}
+                    >
                       {ws.path}
                     </span>
-                    {!ws.pathExists && <span className="shrink-0 text-error">missing</span>}
-                    {ws.trusted && <span className="shrink-0 text-success">trusted</span>}
-                    <span className="shrink-0 text-muted">{ws.piStatus}</span>
+                    {!ws.pathExists && (
+                      <span className="shrink-0 text-error">缺失</span>
+                    )}
+                    {ws.trusted && (
+                      <span className="shrink-0 text-success">已信任</span>
+                    )}
+                    <span className="shrink-0 text-muted">
+                      {localizedStatus(ws.piStatus)}
+                    </span>
                   </div>
                 ))
               )}
             </DiagSection>
 
-            <DiagSection title="Providers">
+            <DiagSection title="提供商">
               {report.providersError ? (
                 <div className="flex items-center gap-2 text-xs text-warning">
                   <AlertTriangle size={13} className="shrink-0" />
-                  <span className="min-w-0 flex-1 break-words">{report.providersError}</span>
+                  <span className="min-w-0 flex-1 break-words">
+                    {report.providersError}
+                  </span>
                 </div>
               ) : !report.providers || report.providers.length === 0 ? (
-                <p className="text-xs text-dim">No custom providers configured (models.json).</p>
+                <p className="text-xs text-dim">
+                  未配置自定义提供商（models.json）。
+                </p>
               ) : (
                 report.providers.map((provider) => {
-                  const keyInfo = KEY_STATE_LABELS[provider.keyState] ?? { label: provider.keyState, tone: 'plain' as RowTone }
+                  const keyInfo = KEY_STATE_LABELS[provider.keyState] ?? {
+                    label: provider.keyState,
+                    tone: "plain" as RowTone,
+                  };
                   return (
-                    <div key={provider.name} className="flex items-center gap-2 py-1 text-xs">
-                      <StatusGlyph tone={keyInfo.tone === 'plain' ? 'ok' : keyInfo.tone} />
-                      <span className="shrink-0 text-secondary">{provider.name}</span>
+                    <div
+                      key={provider.name}
+                      className="flex items-center gap-2 py-1 text-xs"
+                    >
+                      <StatusGlyph
+                        tone={keyInfo.tone === "plain" ? "ok" : keyInfo.tone}
+                      />
+                      <span className="shrink-0 text-secondary">
+                        {provider.name}
+                      </span>
                       <span className="shrink-0 text-faint">
-                        {provider.modelCount} model{provider.modelCount === 1 ? '' : 's'}
+                        {provider.modelCount} 个模型
                       </span>
                       <span
                         className={clsx(
-                          'min-w-0 flex-1 truncate text-right',
-                          keyInfo.tone === 'plain' ? 'text-muted' : TONE_TEXT[keyInfo.tone]
+                          "min-w-0 flex-1 truncate text-right",
+                          keyInfo.tone === "plain"
+                            ? "text-muted"
+                            : TONE_TEXT[keyInfo.tone],
                         )}
-                        title={provider.envVar ? `$${provider.envVar}` : undefined}
+                        title={
+                          provider.envVar ? `$${provider.envVar}` : undefined
+                        }
                       >
                         {keyInfo.label}
-                        {provider.envVar ? ` ($${provider.envVar})` : ''}
+                        {provider.envVar ? ` ($${provider.envVar})` : ""}
                       </span>
                     </div>
-                  )
+                  );
                 })
               )}
             </DiagSection>
 
-            <DiagSection title="Permissions">
-              <DiagRow label="Mode" value={report.permissions.mode} />
+            <DiagSection title="权限">
               <DiagRow
-                label="Global rules"
-                value={
-                  report.permissions.globalRuleCount === null
-                    ? `invalid file: ${report.permissions.globalRulesError ?? 'unknown error'}`
-                    : String(report.permissions.globalRuleCount)
-                }
-                tone={report.permissions.globalRuleCount === null ? 'fail' : 'plain'}
+                label="模式"
+                value={getPermissionModeLabel(report.permissions.mode)}
               />
               <DiagRow
-                label="Workspace rules"
+                label="全局规则"
+                value={
+                  report.permissions.globalRuleCount === null
+                    ? `文件无效：${localizeIpcErrorMessage(
+                        report.permissions.globalRulesError ?? "未知错误",
+                      )}`
+                    : String(report.permissions.globalRuleCount)
+                }
+                tone={
+                  report.permissions.globalRuleCount === null ? "fail" : "plain"
+                }
+              />
+              <DiagRow
+                label="工作区规则"
                 value={
                   report.permissions.workspace.hasWorkspaceRules
-                    ? `present${report.permissions.workspace.hasAllowRules ? ', has allow rules' : ''}`
-                    : 'none'
+                    ? `存在${report.permissions.workspace.hasAllowRules ? "，包含允许规则" : ""}`
+                    : "无"
                 }
               />
               {report.permissions.workspace.workspacePath && (
                 <DiagRow
-                  label="Workspace trust"
-                  value={report.permissions.workspace.trusted ? 'trusted' : 'not trusted'}
+                  label="工作区信任状态"
+                  value={
+                    report.permissions.workspace.trusted ? "已信任" : "未信任"
+                  }
                   tone={
-                    report.permissions.workspace.hasAllowRules && !report.permissions.workspace.trusted
-                      ? 'warn'
-                      : 'plain'
+                    report.permissions.workspace.hasAllowRules &&
+                    !report.permissions.workspace.trusted
+                      ? "warn"
+                      : "plain"
                   }
                 />
               )}
             </DiagSection>
 
-            <DiagSection title="Storage">
-              <DiagRow label="GUI data dir" value={report.storage.guiDataDir} mono />
-              <DiagRow label="Settings file" value={report.storage.settingsPath} mono />
+            <DiagSection title="存储">
               <DiagRow
-                label="Sessions root"
+                label="GUI 数据目录"
+                value={report.storage.guiDataDir}
+                mono
+              />
+              <DiagRow
+                label="设置文件"
+                value={report.storage.settingsPath}
+                mono
+              />
+              <DiagRow
+                label="会话根目录"
                 value={report.storage.sessionsRoot}
                 mono
-                tone={report.storage.sessionsRootExists ? 'plain' : 'warn'}
+                tone={report.storage.sessionsRootExists ? "plain" : "warn"}
               />
             </DiagSection>
 
-            <DiagSection title="Recent Errors">
+            <DiagSection title="最近错误">
               {report.recentErrors.length === 0 ? (
-                <p className="text-xs text-dim">No warnings or errors recorded this run.</p>
+                <p className="text-xs text-dim">本次运行没有记录警告或错误。</p>
               ) : (
                 <div className="space-y-1">
-                  {report.recentErrors.slice(-MAX_VISIBLE_LOG_ENTRIES).map((entry, index) => (
-                    <LogEntryRow key={`${entry.ts}-${index}`} entry={entry} now={report.generatedAt} />
-                  ))}
+                  {report.recentErrors
+                    .slice(-MAX_VISIBLE_LOG_ENTRIES)
+                    .map((entry, index) => (
+                      <LogEntryRow
+                        key={`${entry.ts}-${index}`}
+                        entry={entry}
+                        now={report.generatedAt}
+                      />
+                    ))}
                 </div>
               )}
             </DiagSection>
@@ -252,65 +328,93 @@ export function DiagnosticsPanel(): React.JSX.Element {
         ) : null}
       </div>
     </div>
-  )
+  );
 }
 
-function DiagSection({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
+function DiagSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
   return (
     <section>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-dim">{title}</h3>
-      <div className="rounded-md border border-border bg-surface/50 px-3 py-2">{children}</div>
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-dim">
+        {title}
+      </h3>
+      <div className="rounded-md border border-border bg-surface/50 px-3 py-2">
+        {children}
+      </div>
     </section>
-  )
+  );
 }
 
 function DiagRow({
   label,
   value,
-  tone = 'plain',
+  tone = "plain",
   mono = false,
 }: {
-  label: string
-  value: string
-  tone?: RowTone
-  mono?: boolean
+  label: string;
+  value: string;
+  tone?: RowTone;
+  mono?: boolean;
 }): React.JSX.Element {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1 text-xs">
       <span className="shrink-0 text-muted">{label}</span>
       <span
         className={clsx(
-          'min-w-0 break-all text-right',
-          mono && 'font-mono',
-          tone === 'plain' ? 'text-secondary' : TONE_TEXT[tone]
+          "min-w-0 break-all text-right",
+          mono && "font-mono",
+          tone === "plain" ? "text-secondary" : TONE_TEXT[tone],
         )}
       >
         {value}
       </span>
     </div>
-  )
+  );
 }
 
-function StatusGlyph({ tone }: { tone: Exclude<RowTone, 'plain'> }): React.JSX.Element {
-  if (tone === 'ok') return <CheckCircle2 size={13} className="shrink-0 text-success" />
-  if (tone === 'warn') return <AlertTriangle size={13} className="shrink-0 text-warning" />
-  return <XCircle size={13} className="shrink-0 text-error" />
+function StatusGlyph({
+  tone,
+}: {
+  tone: Exclude<RowTone, "plain">;
+}): React.JSX.Element {
+  if (tone === "ok")
+    return <CheckCircle2 size={13} className="shrink-0 text-success" />;
+  if (tone === "warn")
+    return <AlertTriangle size={13} className="shrink-0 text-warning" />;
+  return <XCircle size={13} className="shrink-0 text-error" />;
 }
 
-function LogEntryRow({ entry, now }: { entry: AppLogEntry; now: number }): React.JSX.Element {
+function LogEntryRow({
+  entry,
+  now,
+}: {
+  entry: AppLogEntry;
+  now: number;
+}): React.JSX.Element {
   return (
     <div className="flex items-start gap-2 text-xs" title={entry.detail}>
       <span
         className={clsx(
-          'shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase',
-          entry.level === 'error' ? 'bg-error-bg text-error' : 'bg-warning-bg text-warning'
+          "shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase",
+          entry.level === "error"
+            ? "bg-error-bg text-error"
+            : "bg-warning-bg text-warning",
         )}
       >
-        {entry.level}
+        {entry.level === "error" ? "错误" : "警告"}
       </span>
-      <span className="shrink-0 text-faint">{formatRelativeTime(entry.ts, now)}</span>
+      <span className="shrink-0 text-faint">
+        {formatRelativeTime(entry.ts, now)}
+      </span>
       <span className="shrink-0 text-muted">[{entry.scope}]</span>
-      <span className="min-w-0 flex-1 break-words text-secondary">{entry.message}</span>
+      <span className="min-w-0 flex-1 break-words text-secondary">
+        {entry.message}
+      </span>
     </div>
-  )
+  );
 }

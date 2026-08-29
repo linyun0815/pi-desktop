@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { useAppStore } from '../store'
-import { Image as ImageIcon, Loader2, X } from 'lucide-react'
+import { useEffect, useState } from "react";
+import { useAppStore } from "../store";
+import { Image as ImageIcon, Loader2, X } from "lucide-react";
+import { formatUiError } from "../utils/ipc-error";
 
 /**
  * Read-only image preview pane, opened when a chat filename link points at an
@@ -8,48 +9,52 @@ import { Image as ImageIcon, Loader2, X } from 'lucide-react'
  * and renders the base64 payload as a data URL.
  */
 export function ImageViewer(): React.JSX.Element | null {
-  const target = useAppStore((state) => state.previewTarget)
-  const image = target?.kind === 'image' ? target : null
-  const [dataUrl, setDataUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const target = useAppStore((state) => state.previewTarget);
+  const image = target?.kind === "image" ? target : null;
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!image) {
-      setDataUrl(null)
-      return
+      setDataUrl(null);
+      return;
     }
 
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    setDataUrl(null)
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setDataUrl(null);
 
     void (async () => {
       try {
-        const result = await window.piDesktop.files.readAttachment(image.path)
-        if (cancelled) return
-        if (result.kind === 'image') {
-          setDataUrl(`data:${result.image.mimeType};base64,${result.image.data}`)
+        const result = await window.piDesktop.files.readAttachment(image.path);
+        if (cancelled) return;
+        if (result.kind === "image") {
+          setDataUrl(
+            `data:${result.image.mimeType};base64,${result.image.data}`,
+          );
         } else if (/\.svg$/i.test(image.name)) {
           // SVG is read as text; render it directly from its markup.
-          setDataUrl(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.content)}`)
+          setDataUrl(
+            `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.content)}`,
+          );
         } else {
-          setError('Not a supported image file')
+          setError("不是受支持的图像文件");
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to read image')
+        if (!cancelled) setError(formatUiError(err));
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setLoading(false);
       }
-    })()
+    })();
 
     return () => {
-      cancelled = true
-    }
-  }, [image])
+      cancelled = true;
+    };
+  }, [image]);
 
-  if (!image) return null
+  if (!image) return null;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-[var(--color-app)]">
@@ -62,7 +67,7 @@ export function ImageViewer(): React.JSX.Element | null {
         <button
           onClick={() => void useAppStore.getState().setPreviewTarget(null)}
           className="rounded p-1 text-dim hover:text-secondary"
-          title="Close image"
+          title="关闭图像"
         >
           <X size={12} />
         </button>
@@ -83,5 +88,5 @@ export function ImageViewer(): React.JSX.Element | null {
         ) : null}
       </div>
     </div>
-  )
+  );
 }

@@ -1,114 +1,131 @@
-import { existsSync } from 'fs'
-import { join, delimiter as PATH_DELIMITER } from 'path'
-import { spawnSync } from 'child_process'
-import type { CouncilAgentId } from '../shared/council-config'
-import { COUNCIL_AGENT_IDS } from '../shared/council-config'
-import { buildNpmPrefixCommand } from './cmd-escape'
-import { getPiCli } from './pi-rpc-manager'
+import { existsSync } from "fs";
+import {
+  join,
+  delimiter as PATH_DELIMITER,
+  posix as posixPath,
+  win32 as win32Path,
+} from "path";
+import { spawnSync } from "child_process";
+import type { CouncilAgentId } from "../shared/council-config";
+import { COUNCIL_AGENT_IDS } from "../shared/council-config";
+import { buildNpmPrefixCommand } from "./cmd-escape";
+import { getPiCli } from "./pi-rpc-manager";
 
-const IS_WINDOWS = process.platform === 'win32'
+const IS_WINDOWS = process.platform === "win32";
 
 /** Base executable name per council agent. */
 export const AGENT_BINARIES: Record<CouncilAgentId, string> = {
-  pi: 'pi',
-  claude: 'claude',
-  codex: 'codex',
-}
+  pi: "pi",
+  claude: "claude",
+  codex: "codex",
+};
 
 export interface DetectedAgent {
-  id: CouncilAgentId
-  found: boolean
-  path: string | null
+  id: CouncilAgentId;
+  found: boolean;
+  path: string | null;
 }
 
 interface PlatformInfo {
-  isWindows: boolean
-  home: string
-  env: NodeJS.ProcessEnv
+  isWindows: boolean;
+  home: string;
+  env: NodeJS.ProcessEnv;
 }
 
 /** Common install locations to probe, ordered most- to least-likely. Pure. */
-export function candidatePaths(id: CouncilAgentId, platform: PlatformInfo): string[] {
-  const base = AGENT_BINARIES[id]
-  const { isWindows, home, env } = platform
-  const out: string[] = []
+export function candidatePaths(
+  id: CouncilAgentId,
+  platform: PlatformInfo,
+): string[] {
+  const base = AGENT_BINARIES[id];
+  const { isWindows, home, env } = platform;
+  const path = isWindows ? win32Path : posixPath;
+  const out: string[] = [];
   if (isWindows) {
-    const appData = env.APPDATA ?? ''
-    const localAppData = env.LOCALAPPDATA ?? ''
-    if (appData) out.push(join(appData, 'npm', `${base}.cmd`))
-    if (localAppData) out.push(join(localAppData, 'npm', `${base}.cmd`))
-    out.push(join('C:\\Program Files', 'nodejs', `${base}.cmd`))
+    const appData = env.APPDATA ?? "";
+    const localAppData = env.LOCALAPPDATA ?? "";
+    if (appData) out.push(path.join(appData, "npm", `${base}.cmd`));
+    if (localAppData) out.push(path.join(localAppData, "npm", `${base}.cmd`));
+    out.push(path.join("C:\\Program Files", "nodejs", `${base}.cmd`));
   } else {
-    out.push(join('/opt/homebrew/bin', base))
-    out.push(join('/usr/local/bin', base))
-    out.push(join('/usr/bin', base))
-    out.push(join(home, '.local/bin', base))
-    out.push(join(home, '.npm-global/bin', base))
+    out.push(path.join("/opt/homebrew/bin", base));
+    out.push(path.join("/usr/local/bin", base));
+    out.push(path.join("/usr/bin", base));
+    out.push(path.join(home, ".local/bin", base));
+    out.push(path.join(home, ".npm-global/bin", base));
   }
-  return out
+  return out;
 }
 
 function whichInPath(name: string): string | null {
-  const pathDirs = (process.env.PATH ?? '').split(PATH_DELIMITER).filter(Boolean)
+  const pathDirs = (process.env.PATH ?? "")
+    .split(PATH_DELIMITER)
+    .filter(Boolean);
   const exts = IS_WINDOWS
-    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').map((e) => e.toLowerCase())
-    : ['']
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((e) => e.toLowerCase())
+    : [""];
   for (const dir of pathDirs) {
     for (const ext of exts) {
-      const candidate = join(dir, name + ext)
-      if (existsSync(candidate)) return candidate
+      const candidate = join(dir, name + ext);
+      if (existsSync(candidate)) return candidate;
     }
   }
-  return null
+  return null;
 }
 
 function npmGlobalPrefix(): string | null {
   try {
-    const command = buildNpmPrefixCommand(IS_WINDOWS)
+    const command = buildNpmPrefixCommand(IS_WINDOWS);
     const result = spawnSync(command.file, command.args, {
-      encoding: 'utf-8',
+      encoding: "utf-8",
       shell: IS_WINDOWS,
       timeout: 5000,
-    })
+    });
     if (result.status === 0 && result.stdout) {
-      const prefix = result.stdout.trim()
-      if (prefix && existsSync(prefix)) return prefix
+      const prefix = result.stdout.trim();
+      if (prefix && existsSync(prefix)) return prefix;
     }
   } catch {
     // npm not on PATH — ignore
   }
-  return null
+  return null;
 }
 
 function resolveAgent(id: CouncilAgentId): string | null {
-  if (id === 'pi') {
-    const configured = getPiCli()
-    if (configured.found) return configured.script
+  if (id === "pi") {
+    const configured = getPiCli();
+    if (configured.found) return configured.script;
   }
-  const base = AGENT_BINARIES[id]
+  const base = AGENT_BINARIES[id];
   // 1. PATH (respects PATHEXT on Windows)
-  const fromPath = whichInPath(base)
-  if (fromPath) return fromPath
+  const fromPath = whichInPath(base);
+  if (fromPath) return fromPath;
   // 2. npm global prefix
-  const prefix = npmGlobalPrefix()
+  const prefix = npmGlobalPrefix();
   if (prefix) {
     const candidates = IS_WINDOWS
       ? [join(prefix, `${base}.cmd`)]
-      : [join(prefix, 'bin', base)]
-    for (const c of candidates) if (existsSync(c)) return c
+      : [join(prefix, "bin", base)];
+    for (const c of candidates) if (existsSync(c)) return c;
   }
   // 3. common locations
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? ''
-  for (const c of candidatePaths(id, { isWindows: IS_WINDOWS, home, env: process.env })) {
-    if (existsSync(c)) return c
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  for (const c of candidatePaths(id, {
+    isWindows: IS_WINDOWS,
+    home,
+    env: process.env,
+  })) {
+    if (existsSync(c)) return c;
   }
-  return null
+  return null;
 }
 
 /** Detect every known consultant agent on this machine. */
 export function detectAgents(): DetectedAgent[] {
   return COUNCIL_AGENT_IDS.map((id) => {
-    const path = resolveAgent(id)
-    return { id, found: path !== null, path }
-  })
+    const path = resolveAgent(id);
+    return { id, found: path !== null, path };
+  });
 }

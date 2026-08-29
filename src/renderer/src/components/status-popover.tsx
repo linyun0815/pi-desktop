@@ -1,9 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
-import { getSessionTitle } from '../utils/session-title'
-import { useAppStore } from '../store'
-import { DEFAULT_AGENT_ENGINE_LABEL, agentEngineLabel } from '../../../shared/agent-engine-label'
-import type { InstalledSkill } from '../../../shared/ipc-contracts'
-import { clsx } from 'clsx'
+import { useState, useEffect, useRef } from "react";
+import { getSessionTitle } from "../utils/session-title";
+import { useAppStore } from "../store";
+import {
+  DEFAULT_AGENT_ENGINE_LABEL,
+  agentEngineLabel,
+} from "../../../shared/agent-engine-label";
+import type { InstalledSkill } from "../../../shared/ipc-contracts";
+import { localizedStatus } from "../utils/ui-text";
+import { clsx } from "clsx";
 import {
   Activity,
   Cpu,
@@ -20,108 +24,113 @@ import {
   Plug,
   FileText,
   BookOpen,
-} from 'lucide-react'
+} from "lucide-react";
 
 interface CommandInfo {
-  name: string
-  description?: string
-  source: 'extension' | 'prompt' | 'skill'
-  path?: string
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
+  path?: string;
 }
 
 interface McpServer {
-  name: string
-  command: string
-  args: string[]
-  env: Record<string, string>
-  source: 'global' | 'project'
-  status: 'configured' | 'unknown'
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  source: "global" | "project";
+  status: "configured" | "unknown";
 }
 
 export function StatusPopover(): React.JSX.Element {
-  const [isOpen, setIsOpen] = useState(false)
-  const [commands, setCommands] = useState<CommandInfo[]>([])
-  const [skills, setSkills] = useState<InstalledSkill[]>([])
-  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
-  const [loading, setLoading] = useState(false)
+  const [isOpen, setIsOpen] = useState(false);
+  const [commands, setCommands] = useState<CommandInfo[]>([]);
+  const [skills, setSkills] = useState<InstalledSkill[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const piStatus = useAppStore((state) => state.piStatus)
-  const engineLabel = useAppStore((state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL)
-  const piPid = useAppStore((state) => state.piPid)
-  const piError = useAppStore((state) => state.piError)
-  const [errorCopied, setErrorCopied] = useState(false)
-  const sessionState = useAppStore((state) => state.sessionState)
-  const sessionStats = useAppStore((state) => state.sessionStats)
-  const activeWorkspace = useAppStore((state) => state.activeWorkspace)
-  const compactContext = useAppStore((state) => state.compactContext)
-  const isCompacting = sessionState?.isCompacting ?? false
-  const ref = useRef<HTMLDivElement>(null)
+  const piStatus = useAppStore((state) => state.piStatus);
+  const engineLabel = useAppStore(
+    (state) => agentEngineLabel(state.piEngine) ?? DEFAULT_AGENT_ENGINE_LABEL,
+  );
+  const piPid = useAppStore((state) => state.piPid);
+  const piError = useAppStore((state) => state.piError);
+  const [errorCopied, setErrorCopied] = useState(false);
+  const sessionState = useAppStore((state) => state.sessionState);
+  const sessionStats = useAppStore((state) => state.sessionStats);
+  const activeWorkspace = useAppStore((state) => state.activeWorkspace);
+  const compactContext = useAppStore((state) => state.compactContext);
+  const isCompacting = sessionState?.isCompacting ?? false;
+  const ref = useRef<HTMLDivElement>(null);
 
   // Some providers (e.g. lmstudio) return a fractional context-usage percent
   // like 1.077270; round + clamp so it fits the fixed-width label instead of
   // overflowing the popover.
   const contextPct = sessionStats?.contextUsage
-    ? Math.min(100, Math.max(0, Math.round(sessionStats.contextUsage.percent ?? 0)))
-    : 0
+    ? Math.min(
+        100,
+        Math.max(0, Math.round(sessionStats.contextUsage.percent ?? 0)),
+      )
+    : 0;
 
   // Load data when opened
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) return;
 
     const loadData = async () => {
-      setLoading(true)
+      setLoading(true);
       try {
         const [cmds, skls, mcp] = await Promise.all([
           window.piDesktop.piCommands.list().catch(() => []),
           window.piDesktop.skills.list().catch(() => []),
           window.piDesktop.mcpServers.list().catch(() => []),
-        ])
-        setCommands(cmds as CommandInfo[])
-        setSkills(skls as InstalledSkill[])
-        setMcpServers(mcp as McpServer[])
+        ]);
+        setCommands(cmds as CommandInfo[]);
+        setSkills(skls as InstalledSkill[]);
+        setMcpServers(mcp as McpServer[]);
       } catch {
         // Silent failure
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
-    }
+    };
 
-    loadData()
-  }, [isOpen])
+    loadData();
+  }, [isOpen]);
 
   // Close on click outside
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) return;
 
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
-        setIsOpen(false)
+        setIsOpen(false);
       }
-    }
+    };
 
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false)
-    }
+      if (e.key === "Escape") setIsOpen(false);
+    };
 
-    document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleEscape)
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleEscape);
     return () => {
-      document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleEscape)
-    }
-  }, [isOpen])
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isOpen]);
 
   // Group commands by source
-  const extensionCommands = commands.filter((c) => c.source === 'extension')
-  const promptCommands = commands.filter((c) => c.source === 'prompt')
-  const skillCommands = commands.filter((c) => c.source === 'skill')
+  const extensionCommands = commands.filter((c) => c.source === "extension");
+  const promptCommands = commands.filter((c) => c.source === "prompt");
+  const skillCommands = commands.filter((c) => c.source === "skill");
 
   const statusColor = {
-    running: 'bg-success',
-    starting: 'bg-warning animate-pulse',
-    error: 'bg-error',
-    stopped: 'bg-elevated',
-  }[piStatus]
+    running: "bg-success",
+    starting: "bg-warning animate-pulse",
+    error: "bg-error",
+    stopped: "bg-elevated",
+  }[piStatus];
 
   return (
     <div ref={ref} className="relative">
@@ -129,9 +138,9 @@ export function StatusPopover(): React.JSX.Element {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-surface-hover transition-colors"
-        title="System status"
+        title="系统状态"
       >
-        <div className={clsx('h-2 w-2 rounded-full', statusColor)} />
+        <div className={clsx("h-2 w-2 rounded-full", statusColor)} />
         <Activity size={12} className="text-muted" />
       </button>
 
@@ -142,37 +151,46 @@ export function StatusPopover(): React.JSX.Element {
           <div className="px-4 py-3 border-b border-border bg-surface/50">
             <div className="flex items-center gap-2">
               <Activity size={16} className="text-muted" />
-              <span className="text-sm font-medium text-primary">System Status</span>
+              <span className="text-sm font-medium text-primary">系统状态</span>
             </div>
           </div>
 
           <div className="max-h-[70vh] overflow-y-auto">
             {/* Agent process */}
-            <StatusSection title={`${engineLabel} Agent`} icon={<Cpu size={13} />}>
+            <StatusSection
+              title={`${engineLabel} 代理`}
+              icon={<Cpu size={13} />}
+            >
               <StatusRow
-                label="Status"
+                label="状态"
                 value={
                   <span className="flex items-center gap-1.5">
-                    <span className={clsx('h-1.5 w-1.5 rounded-full', statusColor)} />
-                    {piStatus}
-                    {piPid && <span className="text-faint">(PID: {piPid})</span>}
+                    <span
+                      className={clsx("h-1.5 w-1.5 rounded-full", statusColor)}
+                    />
+                    {localizedStatus(piStatus)}
+                    {piPid && (
+                      <span className="text-faint">（PID：{piPid}）</span>
+                    )}
                   </span>
                 }
               />
               {piError && (
                 <div className="mt-2 rounded-md border border-error-bg bg-error-bg p-2">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] uppercase tracking-wide text-error font-semibold">Error</span>
+                    <span className="text-[10px] uppercase tracking-wide text-error font-semibold">
+                      错误
+                    </span>
                     <button
                       type="button"
                       onClick={() => {
-                        navigator.clipboard.writeText(piError)
-                        setErrorCopied(true)
-                        setTimeout(() => setErrorCopied(false), 1500)
+                        navigator.clipboard.writeText(piError);
+                        setErrorCopied(true);
+                        setTimeout(() => setErrorCopied(false), 1500);
                       }}
                       className="text-[10px] text-error/80 hover:text-error"
                     >
-                      {errorCopied ? 'copied' : 'copy'}
+                      {errorCopied ? "已复制" : "复制"}
                     </button>
                   </div>
                   <pre className="text-[11px] text-error whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono">
@@ -182,7 +200,7 @@ export function StatusPopover(): React.JSX.Element {
               )}
               {sessionState?.model && (
                 <StatusRow
-                  label="Model"
+                  label="模型"
                   value={
                     <span className="flex items-center gap-1">
                       {sessionState.model.name}
@@ -194,11 +212,11 @@ export function StatusPopover(): React.JSX.Element {
                 />
               )}
               {sessionState?.model && (
-                <StatusRow label="Provider" value={sessionState.model.provider} />
+                <StatusRow label="提供商" value={sessionState.model.provider} />
               )}
               {sessionState?.thinkingLevel && (
                 <StatusRow
-                  label="Thinking"
+                  label="思考"
                   value={
                     <span className="flex items-center gap-1">
                       <Zap size={10} className="text-warning" />
@@ -208,32 +226,38 @@ export function StatusPopover(): React.JSX.Element {
                 />
               )}
               {sessionState?.sessionId && (
-                <StatusRow label="Session" value={getSessionTitle(sessionState.sessionName, sessionState.sessionId)} />
+                <StatusRow
+                  label="会话"
+                  value={getSessionTitle(
+                    sessionState.sessionName,
+                    sessionState.sessionId,
+                  )}
+                />
               )}
             </StatusSection>
 
             {/* Context & Tokens */}
             {sessionStats && (
-              <StatusSection title="Context Usage" icon={<Layers size={13} />}>
+              <StatusSection title="上下文用量" icon={<Layers size={13} />}>
                 {sessionStats.contextUsage && (
                   <>
                     <StatusRow
-                      label="Window"
+                      label="窗口"
                       value={`${((sessionStats.contextUsage.tokens ?? 0) / 1000).toFixed(0)}k / ${(sessionStats.contextUsage.contextWindow / 1000).toFixed(0)}k`}
                     />
                     <StatusRow
-                      label="Usage"
+                      label="用量"
                       value={
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 bg-card rounded-full overflow-hidden">
                             <div
                               className={clsx(
-                                'h-full rounded-full transition-all',
+                                "h-full rounded-full transition-all",
                                 contextPct > 80
-                                  ? 'bg-error'
+                                  ? "bg-error"
                                   : contextPct > 60
-                                    ? 'bg-warning'
-                                    : 'bg-success'
+                                    ? "bg-warning"
+                                    : "bg-success",
                               )}
                               style={{ width: `${contextPct}%` }}
                             />
@@ -246,51 +270,75 @@ export function StatusPopover(): React.JSX.Element {
                     />
                   </>
                 )}
-                <StatusRow label="Messages" value={String(sessionStats.totalMessages)} />
-                <StatusRow label="Cost" value={`$${sessionStats.cost.toFixed(4)}`} />
                 <StatusRow
-                  label="Tokens"
+                  label="消息数"
+                  value={String(sessionStats.totalMessages)}
+                />
+                <StatusRow
+                  label="费用"
+                  value={`$${sessionStats.cost.toFixed(4)}`}
+                />
+                <StatusRow
+                  label="Token 数"
                   value={`${((sessionStats.tokens.input + sessionStats.tokens.output) / 1000).toFixed(1)}k`}
                 />
                 <button
                   onClick={() => compactContext()}
                   disabled={isCompacting}
                   className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-card px-3 py-1.5 text-xs text-secondary hover:bg-elevated disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  title="Summarize and compact the conversation to free up context"
+                  title="概括并压缩对话以释放上下文空间"
                 >
                   {isCompacting ? (
                     <Loader2 size={12} className="animate-spin" />
                   ) : (
                     <Minimize2 size={12} />
                   )}
-                  {isCompacting ? 'Compacting…' : 'Compact context'}
+                  {isCompacting ? "压缩中…" : "压缩上下文"}
                 </button>
               </StatusSection>
             )}
 
             {/* Workspace */}
             {activeWorkspace && (
-              <StatusSection title="Workspace" icon={<Server size={13} />}>
-                <StatusRow label="Name" value={activeWorkspace.name} />
-                <StatusRow label="Path" value={<span className="truncate block max-w-[180px]">{activeWorkspace.path}</span>} />
+              <StatusSection title="工作区" icon={<Server size={13} />}>
+                <StatusRow label="名称" value={activeWorkspace.name} />
+                <StatusRow
+                  label="路径"
+                  value={
+                    <span className="truncate block max-w-[180px]">
+                      {activeWorkspace.path}
+                    </span>
+                  }
+                />
               </StatusSection>
             )}
 
             {/* Extensions */}
             {extensionCommands.length > 0 && (
-              <StatusSection title="Extensions" icon={<Plug size={13} />} count={extensionCommands.length}>
+              <StatusSection
+                title="扩展"
+                icon={<Plug size={13} />}
+                count={extensionCommands.length}
+              >
                 {extensionCommands.slice(0, 10).map((cmd) => (
-                  <div key={cmd.name} className="flex items-center gap-2 py-0.5">
+                  <div
+                    key={cmd.name}
+                    className="flex items-center gap-2 py-0.5"
+                  >
                     <CheckCircle2 size={10} className="text-success shrink-0" />
-                    <span className="text-xs text-secondary truncate">/{cmd.name}</span>
+                    <span className="text-xs text-secondary truncate">
+                      /{cmd.name}
+                    </span>
                     {cmd.description && (
-                      <span className="text-[10px] text-faint truncate ml-auto">{cmd.description}</span>
+                      <span className="text-[10px] text-faint truncate ml-auto">
+                        {cmd.description}
+                      </span>
                     )}
                   </div>
                 ))}
                 {extensionCommands.length > 10 && (
                   <div className="text-[10px] text-faint mt-1">
-                    +{extensionCommands.length - 10} more
+                    还有 {extensionCommands.length - 10} 项
                   </div>
                 )}
               </StatusSection>
@@ -298,50 +346,72 @@ export function StatusPopover(): React.JSX.Element {
 
             {/* Skills */}
             {skills.length > 0 && (
-              <StatusSection title="Skills" icon={<Puzzle size={13} />} count={skills.length}>
+              <StatusSection
+                title="技能"
+                icon={<Puzzle size={13} />}
+                count={skills.length}
+              >
                 {skills.slice(0, 8).map((skill) => (
-                  <div key={skill.path} className="flex items-center gap-2 py-0.5">
+                  <div
+                    key={skill.path}
+                    className="flex items-center gap-2 py-0.5"
+                  >
                     <Puzzle size={10} className="text-special shrink-0" />
-                    <span className="text-xs text-secondary truncate">{skill.name}</span>
-                    <span className={clsx(
-                      'ml-auto text-[10px] px-1 rounded',
-                      skill.source === 'global'
-                        ? 'bg-accent-bg text-accent-fg'
-                        : 'bg-success-bg text-success'
-                    )}>
-                      {skill.source}
+                    <span className="text-xs text-secondary truncate">
+                      {skill.name}
+                    </span>
+                    <span
+                      className={clsx(
+                        "ml-auto text-[10px] px-1 rounded",
+                        skill.source === "global"
+                          ? "bg-accent-bg text-accent-fg"
+                          : "bg-success-bg text-success",
+                      )}
+                    >
+                      {skill.source === "global" ? "全局" : "项目"}
                     </span>
                   </div>
                 ))}
                 {skills.length > 8 && (
                   <div className="text-[10px] text-faint mt-1">
-                    +{skills.length - 8} more
+                    还有 {skills.length - 8} 项
                   </div>
                 )}
               </StatusSection>
             )}
 
             {/* MCP Servers */}
-            <StatusSection title="MCP Servers" icon={<Plug size={13} />} count={mcpServers.length > 0 ? mcpServers.length : undefined}>
+            <StatusSection
+              title="MCP 服务器"
+              icon={<Plug size={13} />}
+              count={mcpServers.length > 0 ? mcpServers.length : undefined}
+            >
               {mcpServers.length === 0 ? (
-                <div className="text-xs text-faint py-1">
-                  No MCP servers configured
-                </div>
+                <div className="text-xs text-faint py-1">未配置 MCP 服务器</div>
               ) : (
                 mcpServers.map((server) => (
-                  <div key={server.name} className="flex items-center gap-2 py-1">
+                  <div
+                    key={server.name}
+                    className="flex items-center gap-2 py-1"
+                  >
                     <div className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs text-secondary font-medium">{server.name}</div>
-                      <div className="text-[10px] text-faint truncate">{server.command} {server.args.join(' ')}</div>
+                      <div className="text-xs text-secondary font-medium">
+                        {server.name}
+                      </div>
+                      <div className="text-[10px] text-faint truncate">
+                        {server.command} {server.args.join(" ")}
+                      </div>
                     </div>
-                    <span className={clsx(
-                      'text-[10px] px-1 rounded',
-                      server.source === 'global'
-                        ? 'bg-accent-bg text-accent-fg'
-                        : 'bg-success-bg text-success'
-                    )}>
-                      {server.source}
+                    <span
+                      className={clsx(
+                        "text-[10px] px-1 rounded",
+                        server.source === "global"
+                          ? "bg-accent-bg text-accent-fg"
+                          : "bg-success-bg text-success",
+                      )}
+                    >
+                      {server.source === "global" ? "全局" : "项目"}
                     </span>
                   </div>
                 ))
@@ -350,11 +420,20 @@ export function StatusPopover(): React.JSX.Element {
 
             {/* Prompt Templates */}
             {promptCommands.length > 0 && (
-              <StatusSection title="Prompt Templates" icon={<FileText size={13} />} count={promptCommands.length}>
+              <StatusSection
+                title="提示词模板"
+                icon={<FileText size={13} />}
+                count={promptCommands.length}
+              >
                 {promptCommands.slice(0, 6).map((cmd) => (
-                  <div key={cmd.name} className="flex items-center gap-2 py-0.5">
+                  <div
+                    key={cmd.name}
+                    className="flex items-center gap-2 py-0.5"
+                  >
                     <FileText size={10} className="text-info shrink-0" />
-                    <span className="text-xs text-secondary truncate">/{cmd.name}</span>
+                    <span className="text-xs text-secondary truncate">
+                      /{cmd.name}
+                    </span>
                   </div>
                 ))}
               </StatusSection>
@@ -362,11 +441,20 @@ export function StatusPopover(): React.JSX.Element {
 
             {/* MCP / Skill Commands */}
             {skillCommands.length > 0 && (
-              <StatusSection title="Skill Commands" icon={<BookOpen size={13} />} count={skillCommands.length}>
+              <StatusSection
+                title="技能命令"
+                icon={<BookOpen size={13} />}
+                count={skillCommands.length}
+              >
                 {skillCommands.slice(0, 6).map((cmd) => (
-                  <div key={cmd.name} className="flex items-center gap-2 py-0.5">
+                  <div
+                    key={cmd.name}
+                    className="flex items-center gap-2 py-0.5"
+                  >
                     <BookOpen size={10} className="text-warning shrink-0" />
-                    <span className="text-xs text-secondary truncate">/skill:{cmd.name}</span>
+                    <span className="text-xs text-secondary truncate">
+                      /skill:{cmd.name}
+                    </span>
                   </div>
                 ))}
               </StatusSection>
@@ -382,7 +470,7 @@ export function StatusPopover(): React.JSX.Element {
             {/* Empty state */}
             {!loading && commands.length === 0 && skills.length === 0 && (
               <div className="py-6 text-center text-xs text-faint">
-                No extensions or skills loaded
+                未加载扩展或技能
               </div>
             )}
           </div>
@@ -392,18 +480,18 @@ export function StatusPopover(): React.JSX.Element {
             <span>v{__APP_VERSION__}</span>
             <button
               onClick={() => {
-                useAppStore.getState().refreshSessionStats()
+                useAppStore.getState().refreshSessionStats();
               }}
               className="flex items-center gap-1 hover:text-muted transition-colors"
             >
               <RefreshCw size={10} />
-              Refresh
+              刷新
             </button>
           </div>
         </div>
       )}
     </div>
-  )
+  );
 }
 
 // ─── Section ─────────────────────────────────────────────────────────────────
@@ -414,12 +502,12 @@ function StatusSection({
   count,
   children,
 }: {
-  title: string
-  icon: React.ReactNode
-  count?: number
-  children: React.ReactNode
+  title: string;
+  icon: React.ReactNode;
+  count?: number;
+  children: React.ReactNode;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(true);
 
   return (
     <div className="border-b border-border/50">
@@ -428,7 +516,9 @@ function StatusSection({
         className="flex w-full items-center gap-2 px-4 py-2 hover:bg-surface-hover/30 transition-colors"
       >
         <span className="text-dim">{icon}</span>
-        <span className="text-xs font-medium text-secondary flex-1 text-left">{title}</span>
+        <span className="text-xs font-medium text-secondary flex-1 text-left">
+          {title}
+        </span>
         {count !== undefined && (
           <span className="text-[10px] text-faint bg-card rounded px-1.5 py-0.5">
             {count}
@@ -437,18 +527,14 @@ function StatusSection({
         <ChevronRight
           size={12}
           className={clsx(
-            'text-faint transition-transform',
-            expanded && 'rotate-90'
+            "text-faint transition-transform",
+            expanded && "rotate-90",
           )}
         />
       </button>
-      {expanded && (
-        <div className="px-4 pb-2 space-y-1">
-          {children}
-        </div>
-      )}
+      {expanded && <div className="px-4 pb-2 space-y-1">{children}</div>}
     </div>
-  )
+  );
 }
 
 // ─── Row ─────────────────────────────────────────────────────────────────────
@@ -457,13 +543,13 @@ function StatusRow({
   label,
   value,
 }: {
-  label: string
-  value: React.ReactNode
+  label: string;
+  value: React.ReactNode;
 }): React.JSX.Element {
   return (
     <div className="flex items-center justify-between py-0.5">
       <span className="text-[11px] text-dim">{label}</span>
       <span className="text-[11px] text-secondary">{value}</span>
     </div>
-  )
+  );
 }

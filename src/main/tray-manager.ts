@@ -1,6 +1,12 @@
-import { Tray, Menu, Notification, nativeImage, type BrowserWindow } from 'electron'
-import { execFile } from 'child_process'
-import { trayIsSupported, parseDbusBoolean } from './tray-decision'
+import {
+  Tray,
+  Menu,
+  Notification,
+  nativeImage,
+  type BrowserWindow,
+} from "electron";
+import { execFile } from "child_process";
+import { trayIsSupported, parseDbusBoolean } from "./tray-decision";
 
 // System-tray lifecycle for "minimize to tray on close" (Windows/Linux; macOS
 // is excluded — see tray-decision.ts). Owns the single Tray instance, the
@@ -11,79 +17,84 @@ import { trayIsSupported, parseDbusBoolean } from './tray-decision'
 
 // D-Bus well-known name a StatusNotifierItem host claims when a system tray is
 // available (KDE, GNOME's AppIndicator extension, sni-qt, snixembed, etc.).
-const SNI_WATCHER_NAME = 'org.kde.StatusNotifierWatcher'
-const SNI_WATCHER_PATH = '/StatusNotifierWatcher'
+const SNI_WATCHER_NAME = "org.kde.StatusNotifierWatcher";
+const SNI_WATCHER_PATH = "/StatusNotifierWatcher";
 // Bound the D-Bus probe so a missing/slow session bus can't hang enabling.
-const DBUS_PROBE_TIMEOUT_MS = 2_000
+const DBUS_PROBE_TIMEOUT_MS = 2_000;
 
 interface TrayDeps {
-  getWindow: () => BrowserWindow | null
-  quit: () => void
-  iconPath: string
+  getWindow: () => BrowserWindow | null;
+  quit: () => void;
+  iconPath: string;
   // Whether the one-time hint has already been shown in a previous run.
-  hasSeenHint: boolean
+  hasSeenHint: boolean;
   // Persist that the hint has now been shown (fire-and-forget).
-  onHintShown: () => void
+  onHintShown: () => void;
 }
 
-let deps: TrayDeps | null = null
-let tray: Tray | null = null
-let enabled = false
+let deps: TrayDeps | null = null;
+let tray: Tray | null = null;
+let enabled = false;
 // Whether a usable tray icon actually exists this session. Defaults false and
 // is only set true once confirmed, so the close handler never hides the window
 // to a tray that isn't really there.
-let trayAvailable = false
-let hintSeen = false
-let warnedNoTray = false
+let trayAvailable = false;
+let hintSeen = false;
+let warnedNoTray = false;
 
 export function setupTray(injected: TrayDeps): void {
-  deps = injected
-  hintSeen = injected.hasSeenHint
+  deps = injected;
+  hintSeen = injected.hasSeenHint;
 }
 
 function showWindow(): void {
-  const win = deps?.getWindow()
-  if (!win) return
-  if (win.isMinimized()) win.restore()
-  win.show()
-  win.focus()
+  const win = deps?.getWindow();
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
 }
 
 /** Create the tray icon. Returns whether it was created (false on failure). */
 function createTray(): boolean {
-  if (tray) return true // idempotent
-  if (!deps || !trayIsSupported(process.platform)) return false
+  if (tray) return true; // idempotent
+  if (!deps || !trayIsSupported(process.platform)) return false;
 
   try {
-    const image = nativeImage.createFromPath(deps.iconPath)
-    tray = new Tray(image)
-    tray.setToolTip('Pi Desktop')
+    const image = nativeImage.createFromPath(deps.iconPath);
+    tray = new Tray(image);
+    tray.setToolTip("Pi Desktop");
 
     const menu = Menu.buildFromTemplate([
-      { label: 'Show Pi Desktop', click: () => showWindow() },
-      { type: 'separator' },
-      { label: 'Quit Pi Desktop', click: () => deps?.quit() },
-    ])
+      { label: "显示 Pi Desktop", click: () => showWindow() },
+      { type: "separator" },
+      { label: "退出 Pi Desktop", click: () => deps?.quit() },
+    ]);
     // setContextMenu is the primary interface on Linux, where left-click
     // activation is unreliable across desktop environments.
-    tray.setContextMenu(menu)
+    tray.setContextMenu(menu);
     // Windows: a left-click restores the window directly.
-    tray.on('click', () => showWindow())
-    return true
+    tray.on("click", () => showWindow());
+    return true;
   } catch (err) {
-    console.error('[tray] Failed to create tray icon:', err)
-    tray = null
-    return false
+    console.error("[tray] Failed to create tray icon:", err);
+    tray = null;
+    return false;
   }
 }
 
 /** Run a `dbus-send --print-reply` and resolve its stdout, or null on error. */
 function dbusSend(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile('dbus-send', args, { timeout: DBUS_PROBE_TIMEOUT_MS }, (err, stdout) => {
-      resolve(err ? null : stdout)
-    })
-  })
+    execFile(
+      "dbus-send",
+      args,
+      { timeout: DBUS_PROBE_TIMEOUT_MS },
+      (err, stdout) => {
+        resolve(err ? null : stdout);
+      },
+    );
+  });
 }
 
 /**
@@ -101,49 +112,49 @@ function dbusSend(args: string[]): Promise<string | null> {
  */
 async function detectLinuxTrayHost(): Promise<boolean> {
   const ownerReply = await dbusSend([
-    '--session',
-    '--print-reply',
-    '--dest=org.freedesktop.DBus',
-    '/org/freedesktop/DBus',
-    'org.freedesktop.DBus.NameHasOwner',
+    "--session",
+    "--print-reply",
+    "--dest=org.freedesktop.DBus",
+    "/org/freedesktop/DBus",
+    "org.freedesktop.DBus.NameHasOwner",
     `string:${SNI_WATCHER_NAME}`,
-  ])
-  if (parseDbusBoolean(ownerReply ?? '') !== true) return false
+  ]);
+  if (parseDbusBoolean(ownerReply ?? "") !== true) return false;
 
   const hostReply = await dbusSend([
-    '--session',
-    '--print-reply',
+    "--session",
+    "--print-reply",
     `--dest=${SNI_WATCHER_NAME}`,
     SNI_WATCHER_PATH,
-    'org.freedesktop.DBus.Properties.Get',
+    "org.freedesktop.DBus.Properties.Get",
     `string:${SNI_WATCHER_NAME}`,
-    'string:IsStatusNotifierHostRegistered',
-  ])
+    "string:IsStatusNotifierHostRegistered",
+  ]);
   // Only a definitive `false` disqualifies; true or unknown (null) → available.
-  return parseDbusBoolean(hostReply ?? '') !== false
+  return parseDbusBoolean(hostReply ?? "") !== false;
 }
 
 /** Warn once (best-effort) when the feature is on but no tray is available. */
 function warnNoTrayOnce(): void {
-  if (warnedNoTray) return
-  warnedNoTray = true
+  if (warnedNoTray) return;
+  warnedNoTray = true;
   console.warn(
     '[tray] No system-tray host detected; "Minimize to tray on close" will fall back to closing normally.',
-  )
+  );
   if (Notification.isSupported()) {
     new Notification({
-      title: 'System tray unavailable',
-      body: 'This desktop has no system tray, so Pi Desktop will close normally instead of minimizing to the tray.',
+      title: "系统托盘不可用",
+      body: "此桌面环境没有系统托盘，因此 Pi Desktop 关闭时会正常退出，而不会最小化到托盘。",
       ...(deps?.iconPath ? { icon: deps.iconPath } : {}),
-    }).show()
+    }).show();
   }
 }
 
 /** Fully release the tray icon (on quit, or when the feature is turned off). */
 export function destroyTray(): void {
   if (tray) {
-    tray.destroy()
-    tray = null
+    tray.destroy();
+    tray = null;
   }
 }
 
@@ -154,57 +165,57 @@ export function destroyTray(): void {
  * user is never stranded with no window and no icon.
  */
 export function setTrayEnabled(next: boolean): void {
-  enabled = next
+  enabled = next;
   if (!next) {
-    const hadTray = tray !== null
-    destroyTray()
-    trayAvailable = false
-    if (hadTray) showWindow()
-    return
+    const hadTray = tray !== null;
+    destroyTray();
+    trayAvailable = false;
+    if (hadTray) showWindow();
+    return;
   }
 
-  const created = createTray()
+  const created = createTray();
   if (!created) {
-    trayAvailable = false
-    warnNoTrayOnce()
-    return
+    trayAvailable = false;
+    warnNoTrayOnce();
+    return;
   }
 
-  if (process.platform !== 'linux') {
+  if (process.platform !== "linux") {
     // Windows: the notification area is always present.
-    trayAvailable = true
-    return
+    trayAvailable = true;
+    return;
   }
 
   // Linux: the icon only truly appears if a StatusNotifierItem host exists.
   // Stay false until confirmed so a close during the probe won't strand us.
-  trayAvailable = false
+  trayAvailable = false;
   void detectLinuxTrayHost().then((ok) => {
-    trayAvailable = ok
-    if (!ok) warnNoTrayOnce()
-  })
+    trayAvailable = ok;
+    if (!ok) warnNoTrayOnce();
+  });
 }
 
 /** Current setting value, for the close-decision helper. */
 export function isTrayEnabled(): boolean {
-  return enabled
+  return enabled;
 }
 
 /** Whether a usable tray icon actually exists this session. */
 export function isTrayAvailable(): boolean {
-  return trayAvailable
+  return trayAvailable;
 }
 
 /** Show the one-time "still running in the tray" hint, at most once ever. */
 export function notifyFirstHide(): void {
-  if (hintSeen) return
-  hintSeen = true
-  deps?.onHintShown()
+  if (hintSeen) return;
+  hintSeen = true;
+  deps?.onHintShown();
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Pi Desktop is still running',
-      body: 'The window was hidden to the system tray. Click the tray icon to reopen it, or use Quit to exit.',
+      title: "Pi Desktop 仍在运行",
+      body: "窗口已隐藏到系统托盘。点击托盘图标可重新打开，或选择“退出”结束程序。",
       ...(deps?.iconPath ? { icon: deps.iconPath } : {}),
-    }).show()
+    }).show();
   }
 }

@@ -1,62 +1,75 @@
-import { StreamLanguage, type Language, type StreamParser } from '@codemirror/language'
-import { javascript } from '@codemirror/lang-javascript'
-import { json } from '@codemirror/lang-json'
-import { python } from '@codemirror/lang-python'
-import { rust } from '@codemirror/lang-rust'
-import { go } from '@codemirror/lang-go'
-import { java } from '@codemirror/lang-java'
-import { php } from '@codemirror/lang-php'
-import { cpp } from '@codemirror/lang-cpp'
-import { css } from '@codemirror/lang-css'
-import { html } from '@codemirror/lang-html'
-import { xml } from '@codemirror/lang-xml'
-import { sql } from '@codemirror/lang-sql'
-import { yaml } from '@codemirror/lang-yaml'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import {
+  StreamLanguage,
+  type Language,
+  type StreamParser,
+} from "@codemirror/language";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { python } from "@codemirror/lang-python";
+import { rust } from "@codemirror/lang-rust";
+import { go } from "@codemirror/lang-go";
+import { java } from "@codemirror/lang-java";
+import { php } from "@codemirror/lang-php";
+import { cpp } from "@codemirror/lang-cpp";
+import { css } from "@codemirror/lang-css";
+import { html } from "@codemirror/lang-html";
+import { xml } from "@codemirror/lang-xml";
+import { sql } from "@codemirror/lang-sql";
+import { yaml } from "@codemirror/lang-yaml";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 // Stream-based (legacy) modes — no Lezer grammar, but tokenize well enough to
 // color strings/numbers/comments/keywords with the same themed style.
-import { shell } from '@codemirror/legacy-modes/mode/shell'
-import { c as clikeC, kotlin, scala, dart, objectiveC } from '@codemirror/legacy-modes/mode/clike'
-import { toml } from '@codemirror/legacy-modes/mode/toml'
-import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
-import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
-import { lua } from '@codemirror/legacy-modes/mode/lua'
-import { swift } from '@codemirror/legacy-modes/mode/swift'
-import { perl } from '@codemirror/legacy-modes/mode/perl'
-import { ruby } from '@codemirror/legacy-modes/mode/ruby'
-import { r } from '@codemirror/legacy-modes/mode/r'
-import { diff } from '@codemirror/legacy-modes/mode/diff'
-import { properties } from '@codemirror/legacy-modes/mode/properties'
-import { nginx } from '@codemirror/legacy-modes/mode/nginx'
-import { clojure } from '@codemirror/legacy-modes/mode/clojure'
-import { haskell } from '@codemirror/legacy-modes/mode/haskell'
-import { erlang } from '@codemirror/legacy-modes/mode/erlang'
-import { groovy } from '@codemirror/legacy-modes/mode/groovy'
-import { cmake } from '@codemirror/legacy-modes/mode/cmake'
-import { julia } from '@codemirror/legacy-modes/mode/julia'
-import { fSharp, oCaml } from '@codemirror/legacy-modes/mode/mllike'
-import { pascal } from '@codemirror/legacy-modes/mode/pascal'
-import { fortran } from '@codemirror/legacy-modes/mode/fortran'
-import { verilog } from '@codemirror/legacy-modes/mode/verilog'
-import { vhdl } from '@codemirror/legacy-modes/mode/vhdl'
-import { scheme } from '@codemirror/legacy-modes/mode/scheme'
-import { commonLisp } from '@codemirror/legacy-modes/mode/commonlisp'
-import { tcl } from '@codemirror/legacy-modes/mode/tcl'
-import { protobuf } from '@codemirror/legacy-modes/mode/protobuf'
-import { coffeeScript } from '@codemirror/legacy-modes/mode/coffeescript'
-import { highlightCode } from '@lezer/highlight'
-import { StyleModule } from 'style-mod'
-import { themedHighlightStyle } from './code-editor-highlight'
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import {
+  c as clikeC,
+  kotlin,
+  scala,
+  dart,
+  objectiveC,
+} from "@codemirror/legacy-modes/mode/clike";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { lua } from "@codemirror/legacy-modes/mode/lua";
+import { swift } from "@codemirror/legacy-modes/mode/swift";
+import { perl } from "@codemirror/legacy-modes/mode/perl";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { r } from "@codemirror/legacy-modes/mode/r";
+import { diff } from "@codemirror/legacy-modes/mode/diff";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { clojure } from "@codemirror/legacy-modes/mode/clojure";
+import { haskell } from "@codemirror/legacy-modes/mode/haskell";
+import { erlang } from "@codemirror/legacy-modes/mode/erlang";
+import { groovy } from "@codemirror/legacy-modes/mode/groovy";
+import { cmake } from "@codemirror/legacy-modes/mode/cmake";
+import { julia } from "@codemirror/legacy-modes/mode/julia";
+import { fSharp, oCaml } from "@codemirror/legacy-modes/mode/mllike";
+import { pascal } from "@codemirror/legacy-modes/mode/pascal";
+import { fortran } from "@codemirror/legacy-modes/mode/fortran";
+import { verilog } from "@codemirror/legacy-modes/mode/verilog";
+import { vhdl } from "@codemirror/legacy-modes/mode/vhdl";
+import { scheme } from "@codemirror/legacy-modes/mode/scheme";
+import { commonLisp } from "@codemirror/legacy-modes/mode/commonlisp";
+import { tcl } from "@codemirror/legacy-modes/mode/tcl";
+import { protobuf } from "@codemirror/legacy-modes/mode/protobuf";
+import { coffeeScript } from "@codemirror/legacy-modes/mode/coffeescript";
+import { highlightCode } from "@lezer/highlight";
+import { StyleModule } from "style-mod";
+import { themedHighlightStyle } from "./code-editor-highlight";
 
 // Chat code blocks reuse the exact CodeMirror highlighter the code editor uses
 // (themedHighlightStyle over the same Lezer parsers), so colors match 1:1 and
 // track the active theme. We render statically with highlightCode instead of
 // spinning up an EditorView per block — lighter and safe during streaming.
 
-type LangFactory = () => Language
+type LangFactory = () => Language;
 
 // Wrap a legacy StreamParser mode as a Language factory.
-const stream = (parser: StreamParser<unknown>): LangFactory => () => StreamLanguage.define(parser)
+const stream =
+  (parser: StreamParser<unknown>): LangFactory =>
+  () =>
+    StreamLanguage.define(parser);
 
 // Map fence language tokens (```<token>) to a CodeMirror Language. Aliases are
 // spelled out so the tokens models actually emit resolve. Lezer grammars are
@@ -84,7 +97,7 @@ const LANGUAGE_FACTORIES: Record<string, LangFactory> = {
   php: () => php().language,
   c: () => cpp().language,
   cpp: () => cpp().language,
-  'c++': () => cpp().language,
+  "c++": () => cpp().language,
   cc: () => cpp().language,
   h: () => cpp().language,
   hpp: () => cpp().language,
@@ -174,66 +187,117 @@ const LANGUAGE_FACTORIES: Record<string, LangFactory> = {
   // LSL has no dedicated grammar; it is C-like, so the generic clike tokenizer
   // colors its strings/numbers/comments/braces (but not LSL-specific keywords).
   lsl: stream(clikeC),
-}
+};
 
 // Resolved Language instances are cached — parser construction is not free and
 // the same few languages recur across a conversation.
-const languageCache = new Map<string, Language | null>()
+const languageCache = new Map<string, Language | null>();
 
 function getLanguage(lang: string): Language | null {
-  const key = lang.trim().toLowerCase()
-  if (!key) return null
-  if (languageCache.has(key)) return languageCache.get(key) ?? null
-  const factory = LANGUAGE_FACTORIES[key]
-  const language = factory ? factory() : null
-  languageCache.set(key, language)
-  return language
+  const key = lang.trim().toLowerCase();
+  if (!key) return null;
+  if (languageCache.has(key)) return languageCache.get(key) ?? null;
+  const factory = LANGUAGE_FACTORIES[key];
+  const language = factory ? factory() : null;
+  languageCache.set(key, language);
+  return language;
 }
 
 // The HighlightStyle generates its own CSS classes (e.g. `.ͼ1`) whose rules live
 // in a StyleModule. Inside an EditorView that module is auto-mounted; standalone
 // we must mount it ourselves once so the emitted spans actually get colored.
-let stylesMounted = false
+let stylesMounted = false;
 
 function ensureStylesMounted(): void {
-  if (stylesMounted) return
+  if (stylesMounted) return;
   if (themedHighlightStyle.module) {
-    StyleModule.mount(document, themedHighlightStyle.module)
+    StyleModule.mount(document, themedHighlightStyle.module);
   }
-  stylesMounted = true
+  stylesMounted = true;
 }
 
 function escapeHtml(text: string): string {
   return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-/**
- * Highlight `code` for the given fence language token, returning an HTML string
- * of `<span class="…">` runs (for dangerouslySetInnerHTML). Returns null when no
- * parser is available for the language, so callers can fall back to plain text.
- */
-export function highlightCodeToHtml(code: string, lang: string): string | null {
-  const language = getLanguage(lang)
-  if (!language) return null
+export interface HighlightSegment {
+  text: string;
+  classes?: string;
+}
 
-  ensureStylesMounted()
+/** Highlight source into React-friendly text/style segments. */
+export function highlightCodeToSegments(
+  code: string,
+  lang: string,
+): HighlightSegment[] | null {
+  const language = getLanguage(lang);
+  if (!language) return null;
 
-  const tree = language.parser.parse(code)
-  let html = ''
+  ensureStylesMounted();
+  const tree = language.parser.parse(code);
+  const segments: HighlightSegment[] = [];
+  const push = (text: string, classes: string | null): void => {
+    if (!text) return;
+    const previous = segments[segments.length - 1];
+    if (previous && previous.classes === (classes ?? undefined)) {
+      previous.text += text;
+    } else {
+      segments.push({ text, ...(classes ? { classes } : {}) });
+    }
+  };
+
   highlightCode(
     code,
     tree,
     themedHighlightStyle,
-    (text, classes) => {
-      const escaped = escapeHtml(text)
-      html += classes ? `<span class="${classes}">${escaped}</span>` : escaped
-    },
-    () => {
-      html += '\n'
-    }
-  )
-  return html
+    (text, classes) => push(text, classes),
+    () => push("\n", null),
+  );
+  return segments;
+}
+
+/** Split highlighted segments into lines without injecting executable HTML. */
+export function splitHighlightSegments(
+  segments: HighlightSegment[],
+): HighlightSegment[][] {
+  const lines: HighlightSegment[][] = [[]];
+  for (const segment of segments) {
+    const parts = segment.text.split("\n");
+    parts.forEach((part, index) => {
+      if (part) {
+        const line = lines[lines.length - 1];
+        const previous = line[line.length - 1];
+        if (previous && previous.classes === segment.classes)
+          previous.text += part;
+        else
+          line.push({
+            text: part,
+            ...(segment.classes ? { classes: segment.classes } : {}),
+          });
+      }
+      if (index < parts.length - 1) lines.push([]);
+    });
+  }
+  return lines;
+}
+
+/**
+ * Legacy HTML representation retained for callers outside the renderer. The
+ * renderer itself uses `highlightCodeToSegments`, so dynamic source never enters
+ * `dangerouslySetInnerHTML`.
+ */
+export function highlightCodeToHtml(code: string, lang: string): string | null {
+  const segments = highlightCodeToSegments(code, lang);
+  if (!segments) return null;
+  return segments
+    .map((segment) => {
+      const escaped = escapeHtml(segment.text);
+      return segment.classes
+        ? `<span class="${segment.classes}">${escaped}</span>`
+        : escaped;
+    })
+    .join("");
 }

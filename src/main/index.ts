@@ -1,110 +1,146 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, shell } from 'electron'
-import { existsSync, mkdirSync } from 'fs'
-import { basename, join, resolve as resolvePath } from 'path'
-import { isTrustedRendererUrl, RENDERER_INDEX_PATH } from './renderer-origin'
-import { workspaceTrustStore } from './workspace-trust'
-import { WorkspaceManager } from './workspace-manager'
-import { registerIpcHandlers, loadAppSettings, saveAppSettings } from './ipc-handlers'
-import { setPiExecutableOverride, cleanupPiChildTempDir } from './pi-rpc-manager'
-import { fetchAllCatalogPackages } from './package-catalog'
-import { activityStatsStore } from './activity-stats'
-import { configureGuiDataDir, getCanonicalUserDataDir, getExternalGuiDataDir, migrateLegacyGuiData } from './app-data-paths'
-import { setupTray, setTrayEnabled, isTrayEnabled, isTrayAvailable, destroyTray, notifyFirstHide } from './tray-manager'
-import { shouldHideToTray } from './tray-decision'
-import { createEditorGuard } from './editor-guard'
-import { appLog } from './app-log'
-import { IPC_CHANNELS } from '../shared/ipc-contracts'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  Menu,
+  nativeImage,
+  session,
+  shell,
+} from "electron";
+import { existsSync, mkdirSync } from "fs";
+import { basename, join, resolve as resolvePath } from "path";
+import { fileURLToPath } from "url";
+import { isTrustedRendererUrl, RENDERER_INDEX_PATH } from "./renderer-origin";
+import { workspaceTrustStore } from "./workspace-trust";
+import { WorkspaceManager } from "./workspace-manager";
+import {
+  registerIpcHandlers,
+  loadAppSettings,
+  saveAppSettings,
+} from "./ipc-handlers";
+import {
+  setPiExecutableOverride,
+  cleanupPiChildTempDir,
+} from "./pi-rpc-manager";
+import { fetchAllCatalogPackages } from "./package-catalog";
+import { activityStatsStore } from "./activity-stats";
+import {
+  configureGuiDataDir,
+  getCanonicalUserDataDir,
+  getExternalGuiDataDir,
+  migrateLegacyGuiData,
+} from "./app-data-paths";
+import {
+  setupTray,
+  setTrayEnabled,
+  isTrayEnabled,
+  isTrayAvailable,
+  destroyTray,
+  notifyFirstHide,
+} from "./tray-manager";
+import { shouldHideToTray } from "./tray-decision";
+import { createEditorGuard } from "./editor-guard";
+import { appLog } from "./app-log";
+import { onTrustedIpc } from "./ipc/validation";
+import { isAuthorizedAttachmentPath } from "./path-authorization";
+import { IPC_CHANNELS } from "../shared/ipc-contracts";
 
 // Env var honored on startup: if set, the named directory becomes the active
 // workspace (created on first run, switched to on subsequent runs). The CLI
 // launcher in bin/pi-desktop.js sets this from `pi-desktop <path>`.
-const WORKSPACE_ENV_VAR = 'PI_DESKTOP_WORKSPACE'
+const WORKSPACE_ENV_VAR = "PI_DESKTOP_WORKSPACE";
 
 // Electron's development executable otherwise registers as Electron on Windows,
 // which makes the taskbar and notification identity use Electron branding.
-app.setName('Pi Desktop')
-if (process.platform === 'win32') app.setAppUserModelId('dev.pi.desktop-gui')
+app.setName("Pi Desktop");
+if (process.platform === "win32") app.setAppUserModelId("dev.pi.desktop-gui");
 
 // Suppress EPIPE errors from closed subprocess pipes
-process.on('uncaughtException', (err) => {
-  if (err.message?.includes('EPIPE') || (err as NodeJS.ErrnoException).code === 'EPIPE') {
+process.on("uncaughtException", (err) => {
+  if (
+    err.message?.includes("EPIPE") ||
+    (err as NodeJS.ErrnoException).code === "EPIPE"
+  ) {
     // Ignore EPIPE - happens when Pi process exits
-    return
+    return;
   }
-  console.error('Uncaught exception:', err)
-  appLog.error('app', 'Uncaught exception', err)
-})
+  console.error("Uncaught exception:", err);
+  appLog.error("app", "Uncaught exception", err);
+});
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const WINDOW_WIDTH = 1400
-const WINDOW_HEIGHT = 900
-const MIN_WINDOW_WIDTH = 800
-const MIN_WINDOW_HEIGHT = 600
-const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL
-const PRELOAD_PATH = join(__dirname, '../preload/index.js')
+const WINDOW_WIDTH = 1400;
+const WINDOW_HEIGHT = 900;
+const MIN_WINDOW_WIDTH = 800;
+const MIN_WINDOW_HEIGHT = 600;
+const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL;
+const PRELOAD_PATH = join(__dirname, "../preload/index.js");
 // <webview> partitions used by the file preview (see file-tree.tsx). The HTML
 // preview renders untrusted workspace files with scripts and network disabled;
 // the PDF preview needs pdfium (plugins) and is confined to file:// only.
-const HTML_PREVIEW_PARTITION = 'preview'
-const PDF_PREVIEW_PARTITION = 'persist:pdf-preview'
+const HTML_PREVIEW_PARTITION = "preview";
+const PDF_PREVIEW_PARTITION = "persist:pdf-preview";
 
 // In dev: resources/ sits at the project root (app.getAppPath()).
 // In packaged: extraResources config copies resources/ into process.resourcesPath/resources/.
 // Computed lazily: `app` is undefined at module-eval time under electron-vite preview,
 // so reading `app.isPackaged` at top level crashes before whenReady().
-let cachedAppIconPath: string | null = null
+let cachedAppIconPath: string | null = null;
 function getAppIconPath(): string {
-  if (cachedAppIconPath !== null) return cachedAppIconPath
+  if (cachedAppIconPath !== null) return cachedAppIconPath;
   const base = app.isPackaged
-    ? join(process.resourcesPath, 'resources')
-    : join(app.getAppPath(), 'resources')
-  cachedAppIconPath = join(base, 'icons', 'icon.png')
-  return cachedAppIconPath
+    ? join(process.resourcesPath, "resources")
+    : join(app.getAppPath(), "resources");
+  cachedAppIconPath = join(base, "icons", "icon.png");
+  return cachedAppIconPath;
 }
 
 // ─── Workspace Manager (singleton) ───────────────────────────────────────────
 
-let workspaceManager: WorkspaceManager | null = null
+let workspaceManager: WorkspaceManager | null = null;
 
 // The single main window, tracked so the tray, single-instance relaunch, and
 // macOS dock-activate can all bring it back. `isQuitting` distinguishes a real
 // quit (menu/tray Quit, Cmd-Ctrl+Q) from a window close that should hide to tray.
-let mainWindow: BrowserWindow | null = null
-let isQuitting = false
+let mainWindow: BrowserWindow | null = null;
+let isQuitting = false;
 
 // Guards the renderer's unsaved editor buffer against teardown. The renderer
 // mirrors its dirty flag here (ui:editor-dirty-set); quit, non-tray window
 // close, and the reload menu items all pause on the same discard dialog.
-const editorGuard = createEditorGuard()
+const editorGuard = createEditorGuard();
 
 /** Native confirm matching the in-app discard dialog's wording. */
-async function confirmEditorDiscard(window: BrowserWindow | null): Promise<boolean> {
+async function confirmEditorDiscard(
+  window: BrowserWindow | null,
+): Promise<boolean> {
   // Tray Quit can arrive while the window is hidden; surface it so the
   // dialog (and the edits it is asking about) are actually visible.
-  if (window && !window.isDestroyed() && !window.isVisible()) window.show()
+  if (window && !window.isDestroyed() && !window.isVisible()) window.show();
   const options = {
-    type: 'warning' as const,
-    title: 'Unsaved changes',
+    type: "warning" as const,
+    title: "未保存的改动",
     message: editorGuard.promptMessage(),
-    buttons: ['Discard changes', 'Keep editing'],
+    buttons: ["放弃改动", "继续编辑"],
     defaultId: 1,
     cancelId: 1,
-  }
+  };
   const { response } = window
     ? await dialog.showMessageBox(window, options)
-    : await dialog.showMessageBox(options)
-  return response === 0
+    : await dialog.showMessageBox(options);
+  return response === 0;
 }
 
 /** Menu Reload / Force Reload: ask a dirty editor first, then reload. */
 async function reloadMainWindowWithGuard(ignoreCache: boolean): Promise<void> {
-  const window = mainWindow
-  if (!window) return
-  if (editorGuard.needsPrompt() && !(await confirmEditorDiscard(window))) return
+  const window = mainWindow;
+  if (!window) return;
+  if (editorGuard.needsPrompt() && !(await confirmEditorDiscard(window)))
+    return;
   // did-start-loading resets the guard once the reload actually begins.
-  if (ignoreCache) window.webContents.reloadIgnoringCache()
-  else window.webContents.reload()
+  if (ignoreCache) window.webContents.reloadIgnoringCache();
+  else window.webContents.reload();
 }
 
 // Single-instance lock: with "minimize to tray" the window can be hidden while
@@ -112,21 +148,22 @@ async function reloadMainWindowWithGuard(ignoreCache: boolean): Promise<void> {
 // must focus the existing instance instead of spawning a second one. The second
 // process exits immediately; the first receives 'second-instance'.
 if (!app.requestSingleInstanceLock()) {
-  app.quit()
+  app.quit();
 } else {
-  app.on('second-instance', () => {
-    showMainWindow()
-  })
+  app.on("second-instance", () => {
+    showMainWindow();
+  });
 }
 
 // PI_DESKTOP_USER_DATA_DIR set by the launching process overrides the
 // canonical appData-derived directory: that exact directory holds all GUI
 // data and legacy migration is skipped, keeping it fully isolated.
-const externalUserDataDir = getExternalGuiDataDir()
-const userDataDir = externalUserDataDir ?? getCanonicalUserDataDir(app.getPath('appData'))
-mkdirSync(userDataDir, { recursive: true })
-app.setPath('userData', userDataDir)
-configureGuiDataDir(userDataDir)
+const externalUserDataDir = getExternalGuiDataDir();
+const userDataDir =
+  externalUserDataDir ?? getCanonicalUserDataDir(app.getPath("appData"));
+mkdirSync(userDataDir, { recursive: true });
+app.setPath("userData", userDataDir);
+configureGuiDataDir(userDataDir);
 
 // ─── Window Creation ─────────────────────────────────────────────────────────
 
@@ -140,13 +177,32 @@ function isAllowedMainWindowNavigation(targetUrl: string): boolean {
   return isTrustedRendererUrl(targetUrl, {
     devServerUrl: DEV_SERVER_URL,
     rendererIndexPath: RENDERER_INDEX_PATH,
-  })
+  });
 }
 
 /** Whether the active workspace has been trusted by the user (see workspace-trust.ts). */
 function isActiveWorkspaceTrusted(): boolean {
-  const path = workspaceManager?.getActiveWorkspace()?.path
-  return path ? workspaceTrustStore.isTrusted(path) : false
+  const path = workspaceManager?.getActiveWorkspace()?.path;
+  return path ? workspaceTrustStore.isTrusted(path) : false;
+}
+
+const NO_APPROVED_PREVIEW_PATHS: ReadonlySet<string> = new Set();
+
+/** Only files inside the active workspace may be embedded in a preview guest. */
+function isAllowedPreviewSource(source: string): boolean {
+  try {
+    const parsed = new URL(source);
+    if (parsed.protocol !== "file:" || parsed.username || parsed.password)
+      return false;
+    const root = workspaceManager?.getActiveWorkspace()?.path;
+    if (!root) return false;
+    return isAuthorizedAttachmentPath(fileURLToPath(parsed), {
+      workspaceRoot: root,
+      approvedPaths: NO_APPROVED_PREVIEW_PATHS,
+    });
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -160,20 +216,21 @@ function hardenPreviewSession(): void {
   session
     .fromPartition(HTML_PREVIEW_PARTITION)
     .webRequest.onBeforeRequest((details, callback) => {
-      const blocked = !details.url.startsWith('file://') && !isActiveWorkspaceTrusted()
-      callback({ cancel: blocked })
-    })
+      const blocked =
+        !details.url.startsWith("file://") && !isActiveWorkspaceTrusted();
+      callback({ cancel: blocked });
+    });
 }
 
 function createMainWindow(): BrowserWindow {
-  const appIcon = nativeImage.createFromPath(getAppIconPath())
+  const appIcon = nativeImage.createFromPath(getAppIconPath());
   const window = new BrowserWindow({
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
-    title: 'Pi Desktop',
-    backgroundColor: '#0a0a0a',
+    title: "Pi Desktop",
+    backgroundColor: "#0a0a0a",
     icon: appIcon,
     show: false,
     webPreferences: {
@@ -189,122 +246,134 @@ function createMainWindow(): BrowserWindow {
       // without loosening the app's own CSP.
       webviewTag: true,
     },
-  })
+  });
 
   // Hide the top menu bar (File/Edit/View/Window). The application menu stays
   // set so its accelerators (Ctrl+N, Ctrl+O, copy/paste, etc.) keep working;
   // only the visible bar is hidden. autoHideMenuBar is left off so Alt won't
   // reveal it.
-  window.setMenuBarVisibility(false)
+  window.setMenuBarVisibility(false);
 
   // Graceful show (avoid white flash)
-  window.once('ready-to-show', () => {
-    window.show()
-    window.focus()
-  })
+  window.once("ready-to-show", () => {
+    window.show();
+    window.focus();
+  });
 
   // Minimize-to-tray: when enabled (Windows/Linux), a window close hides the
   // window and keeps the app running instead of quitting. A real quit sets
   // `isQuitting` first (see before-quit), so this only intercepts user closes.
-  window.on('close', (event) => {
-    if (shouldHideToTray({ isQuitting, enabled: isTrayEnabled(), platform: process.platform, trayAvailable: isTrayAvailable() })) {
-      event.preventDefault()
-      window.hide()
-      notifyFirstHide()
-      return
+  window.on("close", (event) => {
+    if (
+      shouldHideToTray({
+        isQuitting,
+        enabled: isTrayEnabled(),
+        platform: process.platform,
+        trayAvailable: isTrayAvailable(),
+      })
+    ) {
+      event.preventDefault();
+      window.hide();
+      notifyFirstHide();
+      return;
     }
     // A real close destroys the renderer and its unsaved editor buffer;
     // pause for the same discard decision every in-app path gets. (Hiding to
     // tray above loses nothing, so it never asks.)
     if (editorGuard.needsPrompt()) {
-      event.preventDefault()
+      event.preventDefault();
       void confirmEditorDiscard(window).then((discard) => {
         if (discard) {
-          editorGuard.confirmDiscard()
-          window.close()
+          editorGuard.confirmDiscard();
+          window.close();
         }
-      })
+      });
     }
-  })
+  });
 
   // A reloaded (or crashed-and-recovered) renderer starts with a clean
   // editor; a stale dirty flag here would make quit nag forever.
-  window.webContents.on('did-start-loading', () => editorGuard.reset())
-  window.webContents.on('render-process-gone', () => editorGuard.reset())
+  window.webContents.on("did-start-loading", () => editorGuard.reset());
+  window.webContents.on("render-process-gone", () => editorGuard.reset());
 
-  window.on('closed', () => {
-    if (mainWindow === window) mainWindow = null
-  })
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = null;
+  });
 
   // Open external links in default browser
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://') || url.startsWith('http://')) {
-      shell.openExternal(url)
+    if (url.startsWith("https://") || url.startsWith("http://")) {
+      shell.openExternal(url);
     }
-    return { action: 'deny' }
-  })
+    return { action: "deny" };
+  });
 
   // Block navigation to anything but the pinned renderer (see helper).
-  window.webContents.on('will-navigate', (event, url) => {
-    if (isAllowedMainWindowNavigation(url)) return
-    event.preventDefault()
-  })
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedMainWindowNavigation(url)) return;
+    event.preventDefault();
+  });
 
   // Harden the HTML file-preview <webview> guest before Electron attaches it:
   // strip any preload/Node access it might request and reject anything that
   // isn't the local `file://` preview it's meant for. Defense-in-depth against
   // a renderer XSS trying to attach a guest with elevated webPreferences.
-  window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
-    delete webPreferences.preload
-    webPreferences.nodeIntegration = false
-    webPreferences.nodeIntegrationInSubFrames = false
-    webPreferences.contextIsolation = true
-    webPreferences.sandbox = true
-    webPreferences.webSecurity = true
-    webPreferences.allowRunningInsecureContent = false
+  window.webContents.on(
+    "will-attach-webview",
+    (event, webPreferences, params) => {
+      delete webPreferences.preload;
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.webSecurity = true;
+      webPreferences.allowRunningInsecureContent = false;
 
-    // Only the PDF preview needs pdfium (plugins). For the HTML preview, scripts
-    // run only when the workspace is trusted (interactive preview of your own
-    // project); for an untrusted workspace scripts are disabled so — with sandbox
-    // + webSecurity above and the partition's network block — malicious preview
-    // HTML cannot read other local files or exfiltrate data.
-    const isPdfPreview =
-      params.partition === PDF_PREVIEW_PARTITION || /\.pdf(?:[?#]|$)/i.test(params.src)
-    webPreferences.plugins = isPdfPreview
-    if (!isPdfPreview && !isActiveWorkspaceTrusted()) {
-      webPreferences.javascript = false
-    }
+      // Only the PDF preview needs pdfium (plugins). For the HTML preview, scripts
+      // run only when the workspace is trusted (interactive preview of your own
+      // project); for an untrusted workspace scripts are disabled so — with sandbox
+      // + webSecurity above and the partition's network block — malicious preview
+      // HTML cannot read other local files or exfiltrate data.
+      const isPdfPreview =
+        params.partition === PDF_PREVIEW_PARTITION ||
+        /\.pdf(?:[?#]|$)/i.test(params.src);
+      webPreferences.plugins = isPdfPreview;
+      if (!isPdfPreview && !isActiveWorkspaceTrusted()) {
+        webPreferences.javascript = false;
+      }
 
-    if (!params.src.startsWith('file://')) {
-      event.preventDefault()
-    }
-  })
+      if (!isAllowedPreviewSource(params.src)) {
+        event.preventDefault();
+        return;
+      }
+    },
+  );
 
   // Load renderer
   if (DEV_SERVER_URL) {
-    window.loadURL(DEV_SERVER_URL)
+    window.loadURL(DEV_SERVER_URL);
   } else {
-    window.loadFile(RENDERER_INDEX_PATH)
+    window.loadFile(RENDERER_INDEX_PATH);
   }
 
   // Dev tools in development
-  if (process.env.NODE_ENV === 'development') {
-    window.webContents.openDevTools({ mode: 'detach' })
+  if (process.env.NODE_ENV === "development") {
+    window.webContents.openDevTools({ mode: "detach" });
   }
 
-  mainWindow = window
-  return window
+  mainWindow = window;
+  return window;
 }
 
 // Bring the main window to the foreground, re-creating it if it was fully
 // closed. Used by the tray, single-instance relaunch, and macOS dock activate.
 function showMainWindow(): void {
   if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   } else {
-    createMainWindow()
+    createMainWindow();
   }
 }
 
@@ -313,80 +382,84 @@ function showMainWindow(): void {
 function createApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'File',
+      label: "文件",
       submenu: [
         {
-          label: 'New Session',
-          accelerator: 'CmdOrCtrl+N',
+          label: "新建会话",
+          accelerator: "CmdOrCtrl+N",
           click: () => {
-            const focusedWindow = BrowserWindow.getFocusedWindow()
-            focusedWindow?.webContents.send('menu:new-session')
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            focusedWindow?.webContents.send("menu:new-session");
           },
         },
         {
-          label: 'New Workspace...',
-          accelerator: 'CmdOrCtrl+Shift+N',
+          label: "新建工作区…",
+          accelerator: "CmdOrCtrl+Shift+N",
           click: () => {
-            const focusedWindow = BrowserWindow.getFocusedWindow()
-            focusedWindow?.webContents.send('menu:new-workspace')
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            focusedWindow?.webContents.send("menu:new-workspace");
           },
         },
         {
-          label: 'Open Project...',
-          accelerator: 'CmdOrCtrl+O',
+          label: "打开项目…",
+          accelerator: "CmdOrCtrl+O",
           click: () => {
-            const focusedWindow = BrowserWindow.getFocusedWindow()
-            focusedWindow?.webContents.send('menu:open-project')
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            focusedWindow?.webContents.send("menu:open-project");
           },
         },
-        { type: 'separator' },
-        { role: 'quit' },
+        { type: "separator" },
+        { role: "quit", label: "退出" },
       ],
     },
     {
-      label: 'Edit',
+      label: "编辑",
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        { role: "undo", label: "撤销" },
+        { role: "redo", label: "重做" },
+        { type: "separator" },
+        { role: "cut", label: "剪切" },
+        { role: "copy", label: "复制" },
+        { role: "paste", label: "粘贴" },
+        { role: "selectAll", label: "全选" },
       ],
     },
     {
-      label: 'View',
+      label: "视图",
       submenu: [
         // Not the bare roles: a reload destroys the renderer and its unsaved
         // editor buffer, so both run through the same discard guard as
         // close/quit before touching webContents.
         {
-          label: 'Reload',
-          accelerator: 'CmdOrCtrl+R',
+          label: "重新加载",
+          accelerator: "CmdOrCtrl+R",
           click: () => void reloadMainWindowWithGuard(false),
         },
         {
-          label: 'Force Reload',
-          accelerator: 'Shift+CmdOrCtrl+R',
+          label: "强制重新加载",
+          accelerator: "Shift+CmdOrCtrl+R",
           click: () => void reloadMainWindowWithGuard(true),
         },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
+        { role: "toggleDevTools", label: "开发者工具" },
+        { type: "separator" },
+        { role: "resetZoom", label: "重置缩放" },
+        { role: "zoomIn", label: "放大" },
+        { role: "zoomOut", label: "缩小" },
+        { type: "separator" },
+        { role: "togglefullscreen", label: "全屏" },
       ],
     },
     {
-      label: 'Window',
-      submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }],
+      label: "窗口",
+      submenu: [
+        { role: "minimize", label: "最小化" },
+        { role: "zoom", label: "缩放" },
+        { role: "close", label: "关闭" },
+      ],
     },
-  ]
+  ];
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ─── App Lifecycle ───────────────────────────────────────────────────────────
@@ -394,52 +467,62 @@ function createApplicationMenu(): void {
 app.whenReady().then(async () => {
   if (!externalUserDataDir) {
     await migrateLegacyGuiData({
-      appDataDir: app.getPath('appData'),
-      userDataDir: app.getPath('userData'),
-    })
+      appDataDir: app.getPath("appData"),
+      userDataDir: app.getPath("userData"),
+    });
   }
 
   // Set macOS dock icon (no-op on other platforms)
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.setIcon(nativeImage.createFromPath(getAppIconPath()))
+  if (process.platform === "darwin" && app.dock) {
+    app.dock.setIcon(nativeImage.createFromPath(getAppIconPath()));
   }
 
   // Initialize workspace manager
-  workspaceManager = new WorkspaceManager()
-  await workspaceManager.initialize()
+  workspaceManager = new WorkspaceManager();
+  await workspaceManager.initialize();
 
   // Honor PI_DESKTOP_WORKSPACE if set: switch to (or create) the named workspace.
-  await applyWorkspaceFromEnv(workspaceManager)
+  await applyWorkspaceFromEnv(workspaceManager);
 
   // Lock the HTML preview partition to local files before any preview can load.
-  hardenPreviewSession()
+  hardenPreviewSession();
 
   // Resolve the configured engine before exposing IPC or creating the renderer;
   // otherwise the renderer can win the startup race and launch the default Pi
   // binary before this setting is applied.
-  const settings = await loadAppSettings(workspaceManager)
-  setPiExecutableOverride(settings.piExecutablePath, settings.piEngine)
+  const settings = await loadAppSettings(workspaceManager);
+  setPiExecutableOverride(settings.piExecutablePath, settings.piEngine);
 
   // Register IPC handlers before creating windows. The window getter is a
   // lazy closure — mainWindow is created later and the notification wiring
   // only dereferences it at event time. showMainWindow recreates the window
   // when a notification is clicked after a full close (macOS).
-  registerIpcHandlers(workspaceManager, {
-    getWindow: () => mainWindow,
-    showWindow: showMainWindow,
-  }, getAppIconPath())
+  registerIpcHandlers(
+    workspaceManager,
+    {
+      getWindow: () => mainWindow,
+      showWindow: showMainWindow,
+    },
+    getAppIconPath(),
+  );
 
   // The renderer mirrors its editor-dirty flag on every transition; the
   // quit/close/reload guards below read the cached value.
-  ipcMain.on(IPC_CHANNELS.UI_EDITOR_DIRTY_SET, (_event, dirty: unknown, fileName: unknown) => {
-    editorGuard.setDirty(dirty === true, typeof fileName === 'string' ? fileName : null)
-  })
+  onTrustedIpc(
+    IPC_CHANNELS.UI_EDITOR_DIRTY_SET,
+    (_event, dirty: unknown, fileName: unknown) => {
+      editorGuard.setDirty(
+        dirty === true,
+        typeof fileName === "string" ? fileName : null,
+      );
+    },
+  );
 
   // Create application menu
-  createApplicationMenu()
+  createApplicationMenu();
 
   // Create main window
-  createMainWindow()
+  createMainWindow();
 
   // System tray: inject deps once, then enable it if the setting is on. The
   // one-time "still running" hint reads/persists via app settings.
@@ -449,97 +532,100 @@ app.whenReady().then(async () => {
     iconPath: getAppIconPath(),
     hasSeenHint: settings.hasSeenTrayHint,
     onHintShown: () => {
-      void saveAppSettings({ hasSeenTrayHint: true })
+      void saveAppSettings({ hasSeenTrayHint: true });
     },
-  })
-  setTrayEnabled(settings.minimizeToTrayOnClose)
+  });
+  setTrayEnabled(settings.minimizeToTrayOnClose);
 
   // Warm the package catalog cache in the background so the Catalog tab is
   // instant when first opened. Non-blocking; failures are ignored (offline etc).
-  void fetchAllCatalogPackages().catch(() => {})
+  void fetchAllCatalogPackages().catch(() => {});
 
   // Baseline scan of the persisted activity stats, so the store reflects reality
   // even if the home screen is never opened this run. Non-blocking.
-  void activityStatsStore.refresh()
+  void activityStatsStore.refresh();
 
   // macOS: re-show (or re-create) the window when the dock icon is clicked.
   // showMainWindow handles both a hidden window and a fully-closed one.
-  app.on('activate', () => {
-    showMainWindow()
-  })
-})
+  app.on("activate", () => {
+    showMainWindow();
+  });
+});
 
 // Quit when all windows closed (except macOS)
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
   }
-})
+});
 
 // Cleanup on quit
-app.on('before-quit', (event) => {
+app.on("before-quit", (event) => {
   // Gate BEFORE isQuitting is set: quitting destroys the renderer and its
   // unsaved editor buffer, and a cancelled dialog must leave the tray-hide
   // behavior (which reads isQuitting) exactly as it was.
   if (editorGuard.needsPrompt()) {
-    event.preventDefault()
+    event.preventDefault();
     void confirmEditorDiscard(mainWindow).then((discard) => {
       if (discard) {
-        editorGuard.confirmDiscard()
-        app.quit()
+        editorGuard.confirmDiscard();
+        app.quit();
       }
-    })
-    return
+    });
+    return;
   }
   // Mark a real quit so the window `close` handler stops hiding to tray and lets
   // the window actually close. This is the single choke point every quit path
   // flows through (menu/tray Quit, Cmd-Ctrl+Q).
-  isQuitting = true
+  isQuitting = true;
   // Release the tray icon so it doesn't linger in the notification area.
-  destroyTray()
+  destroyTray();
   // Synchronous incremental scan + write: captures every session touched this
   // run before we exit (async I/O isn't guaranteed to finish during shutdown).
-  activityStatsStore.flushSync()
-  appLog.flushSync()
-  workspaceManager?.stopAll()
+  activityStatsStore.flushSync();
+  appLog.flushSync();
+  workspaceManager?.stopAll();
   // Windows: GUI-owned Pi TEMP does not get OS cleanup — wipe on quit.
-  cleanupPiChildTempDir()
-})
+  cleanupPiChildTempDir();
+});
 
 // Security: prevent new window creation, and stop preview <webview> guests from
 // navigating away from their local file (e.g. a malicious HTML file redirecting
 // itself to a remote URL to phone home).
-app.on('web-contents-created', (_event, contents) => {
+app.on("web-contents-created", (_event, contents) => {
   contents.setWindowOpenHandler(() => {
-    return { action: 'deny' }
-  })
-  if (contents.getType() === 'webview') {
-    contents.on('will-navigate', (event, url) => {
+    return { action: "deny" };
+  });
+  if (contents.getType() === "webview") {
+    contents.on("will-navigate", (event, url) => {
       // An untrusted preview may not navigate away from its local file (e.g. a
       // malicious page redirecting itself to a remote URL). Trusted previews of
       // your own project may navigate freely.
-      if (!url.startsWith('file://') && !isActiveWorkspaceTrusted()) event.preventDefault()
-    })
+      if (!url.startsWith("file://") && !isActiveWorkspaceTrusted())
+        event.preventDefault();
+    });
   }
-})
+});
 
 async function applyWorkspaceFromEnv(manager: WorkspaceManager): Promise<void> {
-  const raw = process.env[WORKSPACE_ENV_VAR]
-  if (!raw) return
+  const raw = process.env[WORKSPACE_ENV_VAR];
+  if (!raw) return;
 
-  const path = resolvePath(raw)
+  const path = resolvePath(raw);
   if (!existsSync(path)) {
-    console.warn(`[Pi Desktop] ${WORKSPACE_ENV_VAR}=${raw} does not exist; ignoring`)
-    return
+    console.warn(
+      `[Pi Desktop] ${WORKSPACE_ENV_VAR}=${raw} does not exist; ignoring`,
+    );
+    return;
   }
 
-  const existing = manager.getWorkspaces().find((w) => w.path === path)
+  const existing = manager.getWorkspaces().find((w) => w.path === path);
   if (existing) {
-    await manager.setActiveWorkspace(existing.id)
-    return
+    await manager.setActiveWorkspace(existing.id);
+    return;
   }
 
-  const name = basename(path) || path
-  const created = await manager.createWorkspace(name, path)
-  await manager.setActiveWorkspace(created.id)
+  const name = basename(path) || path;
+  const created = await manager.createWorkspace(name, path);
+  await manager.setActiveWorkspace(created.id);
 }

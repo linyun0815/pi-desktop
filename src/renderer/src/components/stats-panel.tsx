@@ -1,126 +1,140 @@
-import { useEffect, useMemo, useState } from 'react'
-import { clsx } from 'clsx'
+import { useEffect, useMemo, useState } from "react";
+import { clsx } from "clsx";
 import type {
   ActivityStatsResult,
   ActivityRangeKey,
   ActivityStatsDay,
   ActivityModelUsage,
-} from '../../../shared/ipc-contracts'
-import { buildWeeks, intensityLevel, type IntensityLevel } from '../utils/heatmap-grid'
+} from "../../../shared/ipc-contracts";
+import {
+  buildWeeks,
+  intensityLevel,
+  type IntensityLevel,
+} from "../utils/heatmap-grid";
 
-type Tab = 'overview' | 'models'
+type Tab = "overview" | "models";
 
 const RANGE_LABELS: { key: ActivityRangeKey; label: string }[] = [
-  { key: '365', label: '1y' },
-  { key: '180', label: '6mo' },
-  { key: '90', label: '3mo' },
-  { key: '30', label: '30d' },
-  { key: '7', label: '7d' },
-]
+  { key: "365", label: "1年" },
+  { key: "180", label: "6个月" },
+  { key: "90", label: "3个月" },
+  { key: "30", label: "30天" },
+  { key: "7", label: "7天" },
+];
 
 const RANGE_DAYS: Record<ActivityRangeKey, number> = {
-  '365': 365,
-  '180': 180,
-  '90': 90,
-  '30': 30,
-  '7': 7,
-}
-const MAX_BARS = 26 // token chart resolution cap
-const CHART_TICKS = 4 // y-axis intervals (→ 5 labels)
+  "365": 365,
+  "180": 180,
+  "90": 90,
+  "30": 30,
+  "7": 7,
+};
+const MAX_BARS = 26; // token chart resolution cap
+const CHART_TICKS = 4; // y-axis intervals (→ 5 labels)
 
 // Intensity buckets for the heatmap (0 = empty).
 const LEVEL_CLASSES: Record<IntensityLevel, string> = {
-  0: 'bg-card/60',
-  1: 'bg-accent/30',
-  2: 'bg-accent/50',
-  3: 'bg-accent/70',
-  4: 'bg-accent',
-}
+  0: "bg-card/60",
+  1: "bg-accent/30",
+  2: "bg-accent/50",
+  3: "bg-accent/70",
+  4: "bg-accent",
+};
 
 // Legend dot colors, cycled by model rank.
 const MODEL_DOT_COLORS = [
-  'bg-emerald-500', /* theme-exempt: categorical palette */
-  'bg-blue-500', /* theme-exempt: categorical palette */
-  'bg-sky-400', /* theme-exempt: categorical palette */
-  'bg-violet-500', /* theme-exempt: categorical palette */
-  'bg-amber-500', /* theme-exempt: categorical palette */
-  'bg-rose-500', /* theme-exempt: categorical palette */
-  'bg-teal-400', /* theme-exempt: categorical palette */
-  'bg-neutral-500', /* theme-exempt: categorical palette */
-]
+  "bg-emerald-500" /* theme-exempt: categorical palette */,
+  "bg-blue-500" /* theme-exempt: categorical palette */,
+  "bg-sky-400" /* theme-exempt: categorical palette */,
+  "bg-violet-500" /* theme-exempt: categorical palette */,
+  "bg-amber-500" /* theme-exempt: categorical palette */,
+  "bg-rose-500" /* theme-exempt: categorical palette */,
+  "bg-teal-400" /* theme-exempt: categorical palette */,
+  "bg-neutral-500" /* theme-exempt: categorical palette */,
+];
 
 /** Display label for a model: its models.json name, or the raw id as fallback. */
 function modelLabel(usage: ActivityModelUsage): string {
-  return usage.name ?? usage.model
+  return usage.name ?? usage.model;
 }
 
 /** Compact token/count formatting: 6600000 → "6.6M", 847200 → "847.2k". */
 function formatCompact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
-/** 23 → "11 PM", 0 → "12 AM". */
+/** Format a local hour as a compact 24-hour label. */
 function formatHour(h: number): string {
-  const period = h < 12 ? 'AM' : 'PM'
-  const hr = h % 12 === 0 ? 12 : h % 12
-  return `${hr} ${period}`
+  return `${String(h).padStart(2, "0")}:00`;
 }
 
 function formatShortDate(dateKey: string): string {
-  return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  })
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString("zh-CN", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 interface TokenBucket {
-  label: string
-  total: number
-  byModel: Record<string, number> // model id -> tokens in this bucket
+  label: string;
+  total: number;
+  byModel: Record<string, number>; // model id -> tokens in this bucket
 }
 
 /** Bucket a day slice into ≤ MAX_BARS bars, trimming leading token-free days. */
 function bucketTokens(days: ActivityStatsDay[]): TokenBucket[] {
-  let start = 0
-  while (start < days.length && days[start].tokens === 0) start += 1
-  const span = days.slice(start)
-  if (span.length === 0) return []
-  const size = Math.max(1, Math.ceil(span.length / MAX_BARS))
-  const buckets: TokenBucket[] = []
+  let start = 0;
+  while (start < days.length && days[start].tokens === 0) start += 1;
+  const span = days.slice(start);
+  if (span.length === 0) return [];
+  const size = Math.max(1, Math.ceil(span.length / MAX_BARS));
+  const buckets: TokenBucket[] = [];
   for (let i = 0; i < span.length; i += size) {
-    const chunk = span.slice(i, i + size)
-    const byModel: Record<string, number> = {}
-    let total = 0
+    const chunk = span.slice(i, i + size);
+    const byModel: Record<string, number> = {};
+    let total = 0;
     for (const d of chunk) {
-      total += d.tokens
-      for (const [model, t] of Object.entries(d.tokensByModel)) byModel[model] = (byModel[model] ?? 0) + t
+      total += d.tokens;
+      for (const [model, t] of Object.entries(d.tokensByModel))
+        byModel[model] = (byModel[model] ?? 0) + t;
     }
-    buckets.push({ label: formatShortDate(chunk[0].date), total, byModel })
+    buckets.push({ label: formatShortDate(chunk[0].date), total, byModel });
   }
-  return buckets
+  return buckets;
 }
 
-function StatCard({ label, value }: { label: string; value: string }): React.JSX.Element {
+function StatCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}): React.JSX.Element {
   return (
     <div className="rounded-lg bg-card/40 px-3 py-2.5">
-      <div className="text-[11px] uppercase tracking-wide text-dim">{label}</div>
-      <div className="mt-0.5 truncate text-lg font-semibold text-primary" title={value}>
+      <div className="text-[11px] uppercase tracking-wide text-dim">
+        {label}
+      </div>
+      <div
+        className="mt-0.5 truncate text-lg font-semibold text-primary"
+        title={value}
+      >
         {value}
       </div>
     </div>
-  )
+  );
 }
 
 function Heatmap({ days }: { days: ActivityStatsDay[] }): React.JSX.Element {
   const { weeks, maxCount } = useMemo(() => {
-    const asActivity = days.map((d) => ({ date: d.date, count: d.messages }))
+    const asActivity = days.map((d) => ({ date: d.date, count: d.messages }));
     return {
       weeks: buildWeeks(asActivity),
       maxCount: days.reduce((m, d) => Math.max(m, d.messages), 0),
-    }
-  }, [days])
+    };
+  }, [days]);
 
   return (
     <div className="flex gap-1 overflow-x-auto">
@@ -129,17 +143,19 @@ function Heatmap({ days }: { days: ActivityStatsDay[] }): React.JSX.Element {
           {week.map((day, di) => (
             <div
               key={di}
-              title={day ? `${day.date} — ${day.count} messages` : undefined}
+              title={day ? `${day.date} — ${day.count} 条消息` : undefined}
               className={clsx(
-                'h-3 w-3 rounded-sm',
-                day ? LEVEL_CLASSES[intensityLevel(day.count, maxCount)] : 'bg-transparent'
+                "h-3 w-3 rounded-sm",
+                day
+                  ? LEVEL_CLASSES[intensityLevel(day.count, maxCount)]
+                  : "bg-transparent",
               )}
             />
           ))}
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 function TokenChart({
@@ -147,19 +163,26 @@ function TokenChart({
   orderedModels,
   modelColor,
 }: {
-  days: ActivityStatsDay[]
-  orderedModels: string[] // largest-first; stacking order (top → bottom)
-  modelColor: Map<string, string>
+  days: ActivityStatsDay[];
+  orderedModels: string[]; // largest-first; stacking order (top → bottom)
+  modelColor: Map<string, string>;
 }): React.JSX.Element {
-  const buckets = useMemo(() => bucketTokens(days), [days])
+  const buckets = useMemo(() => bucketTokens(days), [days]);
 
   if (buckets.length === 0) {
-    return <div className="py-10 text-center text-xs text-faint">No token usage in this range.</div>
+    return (
+      <div className="py-10 text-center text-xs text-faint">
+        此时间范围内没有 Token 用量。
+      </div>
+    );
   }
 
-  const max = buckets.reduce((m, b) => Math.max(m, b.total), 0)
-  const ticks = Array.from({ length: CHART_TICKS + 1 }, (_, i) => (max * (CHART_TICKS - i)) / CHART_TICKS)
-  const labelStep = Math.ceil(buckets.length / 6)
+  const max = buckets.reduce((m, b) => Math.max(m, b.total), 0);
+  const ticks = Array.from(
+    { length: CHART_TICKS + 1 },
+    (_, i) => (max * (CHART_TICKS - i)) / CHART_TICKS,
+  );
+  const labelStep = Math.ceil(buckets.length / 6);
 
   return (
     <div className="flex gap-2">
@@ -186,20 +209,28 @@ function TokenChart({
             {buckets.map((b, i) => (
               <div
                 key={i}
-                title={`${b.label} — ${formatCompact(b.total)} tokens`}
+                title={`${b.label} — ${formatCompact(b.total)} 个 Token`}
                 className="flex min-w-[2px] flex-1 flex-col overflow-hidden rounded-sm"
-                style={{ height: max > 0 ? `${Math.max((b.total / max) * 100, b.total > 0 ? 2 : 0)}%` : '0%' }}
+                style={{
+                  height:
+                    max > 0
+                      ? `${Math.max((b.total / max) * 100, b.total > 0 ? 2 : 0)}%`
+                      : "0%",
+                }}
               >
                 {orderedModels.map((model) => {
-                  const t = b.byModel[model] ?? 0
-                  if (t <= 0 || b.total <= 0) return null
+                  const t = b.byModel[model] ?? 0;
+                  if (t <= 0 || b.total <= 0) return null;
                   return (
                     <div
                       key={model}
-                      className={clsx('w-full', modelColor.get(model) ?? 'bg-accent')}
+                      className={clsx(
+                        "w-full",
+                        modelColor.get(model) ?? "bg-accent",
+                      )}
                       style={{ height: `${(t / b.total) * 100}%` }}
                     />
-                  )
+                  );
                 })}
               </div>
             ))}
@@ -209,49 +240,58 @@ function TokenChart({
         <div className="mt-1 flex gap-[3px] text-[10px] text-faint">
           {buckets.map((b, i) => (
             <div key={i} className="min-w-[2px] flex-1 text-center">
-              {i % labelStep === 0 ? b.label : ''}
+              {i % labelStep === 0 ? b.label : ""}
             </div>
           ))}
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function ModelLegend({
   models,
   modelColor,
 }: {
-  models: ActivityModelUsage[]
-  modelColor: Map<string, string>
+  models: ActivityModelUsage[];
+  modelColor: Map<string, string>;
 }): React.JSX.Element {
-  const grandTotal = models.reduce((s, m) => s + m.input + m.output, 0)
+  const grandTotal = models.reduce((s, m) => s + m.input + m.output, 0);
   if (models.length === 0) {
-    return <div className="py-4 text-center text-xs text-faint">No model usage in this range.</div>
+    return (
+      <div className="py-4 text-center text-xs text-faint">
+        此时间范围内没有模型用量。
+      </div>
+    );
   }
   return (
     <div className="space-y-1.5">
       {models.map((m) => {
-        const total = m.input + m.output
-        const pct = grandTotal > 0 ? (total / grandTotal) * 100 : 0
+        const total = m.input + m.output;
+        const pct = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
         return (
           <div key={m.model} className="flex items-center gap-2 text-xs">
             <span
               className={clsx(
-              'h-2 w-2 shrink-0 rounded-full',
-              modelColor.get(m.model) ?? 'bg-neutral-500' /* theme-exempt: categorical palette */
-            )}
+                "h-2 w-2 shrink-0 rounded-full",
+                modelColor.get(m.model) ??
+                  "bg-neutral-500" /* theme-exempt: categorical palette */,
+              )}
             />
-            <span className="min-w-0 flex-1 truncate text-secondary">{modelLabel(m)}</span>
-            <span className="shrink-0 tabular-nums text-dim">
-              {formatCompact(m.input)} in · {formatCompact(m.output)} out
+            <span className="min-w-0 flex-1 truncate text-secondary">
+              {modelLabel(m)}
             </span>
-            <span className="w-12 shrink-0 text-right tabular-nums text-muted">{pct.toFixed(1)}%</span>
+            <span className="shrink-0 tabular-nums text-dim">
+              输入 {formatCompact(m.input)} · 输出 {formatCompact(m.output)}
+            </span>
+            <span className="w-12 shrink-0 text-right tabular-nums text-muted">
+              {pct.toFixed(1)}%
+            </span>
           </div>
-        )
+        );
       })}
     </div>
-  )
+  );
 }
 
 /**
@@ -260,52 +300,63 @@ function ModelLegend({
  * stays uncluttered.
  */
 export function StatsPanel(): React.JSX.Element | null {
-  const [data, setData] = useState<ActivityStatsResult | null>(null)
-  const [tab, setTab] = useState<Tab>('overview')
-  const [range, setRange] = useState<ActivityRangeKey>('365')
+  const [data, setData] = useState<ActivityStatsResult | null>(null);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [range, setRange] = useState<ActivityRangeKey>("365");
 
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     window.piDesktop.activity
       .getStats()
-      .then((r) => { if (!cancelled) setData(r) })
-      .catch(() => { if (!cancelled) setData(null) })
-    return () => { cancelled = true }
-  }, [])
+      .then((r) => {
+        if (!cancelled) setData(r);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const rangedDays = useMemo(() => {
-    if (!data) return []
-    return data.days.slice(-RANGE_DAYS[range])
-  }, [data, range])
+    if (!data) return [];
+    return data.days.slice(-RANGE_DAYS[range]);
+  }, [data, range]);
 
   // Nothing to show on a fresh install.
-  if (!data || data.ranges['365'].messages === 0) return null
+  if (!data || data.ranges["365"].messages === 0) return null;
 
-  const stats = data.ranges[range]
-  const favoriteModel = stats.models[0] ? modelLabel(stats.models[0]) : '—'
+  const stats = data.ranges[range];
+  const favoriteModel = stats.models[0] ? modelLabel(stats.models[0]) : "—";
 
   // Shared model→color mapping (largest-first) so the stacked bars and the
   // legend agree on colors.
-  const orderedModels = stats.models.map((m) => m.model)
+  const orderedModels = stats.models.map((m) => m.model);
   const modelColor = new Map<string, string>(
-    orderedModels.map((model, i) => [model, MODEL_DOT_COLORS[i % MODEL_DOT_COLORS.length]])
-  )
+    orderedModels.map((model, i) => [
+      model,
+      MODEL_DOT_COLORS[i % MODEL_DOT_COLORS.length],
+    ]),
+  );
 
   return (
     <div className="mb-8 rounded-lg border border-border bg-surface/50 p-4">
       {/* Tabs + range toggle */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex gap-1">
-          {(['overview', 'models'] as Tab[]).map((t) => (
+          {(["overview", "models"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={clsx(
-                'rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors',
-                tab === t ? 'bg-elevated text-primary' : 'text-dim hover:text-secondary'
+                "rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors",
+                tab === t
+                  ? "bg-elevated text-primary"
+                  : "text-dim hover:text-secondary",
               )}
             >
-              {t}
+              {t === "overview" ? "概览" : "模型"}
             </button>
           ))}
         </div>
@@ -315,8 +366,10 @@ export function StatsPanel(): React.JSX.Element | null {
               key={key}
               onClick={() => setRange(key)}
               className={clsx(
-                'rounded px-2 py-0.5 text-xs font-medium tabular-nums transition-colors',
-                range === key ? 'bg-elevated text-primary' : 'text-dim hover:text-secondary'
+                "rounded px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
+                range === key
+                  ? "bg-elevated text-primary"
+                  : "text-dim hover:text-secondary",
               )}
             >
               {label}
@@ -325,28 +378,47 @@ export function StatsPanel(): React.JSX.Element | null {
         </div>
       </div>
 
-      {tab === 'overview' ? (
+      {tab === "overview" ? (
         <>
           <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <StatCard label="Sessions" value={stats.sessions.toLocaleString()} />
-            <StatCard label="Messages" value={stats.messages.toLocaleString()} />
-            <StatCard label="Total tokens" value={formatCompact(stats.totalTokens)} />
-            <StatCard label="Active days" value={stats.activeDays.toLocaleString()} />
-            <StatCard label="Current streak" value={`${stats.currentStreak}d`} />
-            <StatCard label="Longest streak" value={`${stats.longestStreak}d`} />
-            <StatCard label="Peak hour" value={stats.peakHour === null ? '—' : formatHour(stats.peakHour)} />
-            <StatCard label="Favorite model" value={favoriteModel} />
+            <StatCard label="会话数" value={stats.sessions.toLocaleString()} />
+            <StatCard label="消息数" value={stats.messages.toLocaleString()} />
+            <StatCard
+              label="Token 总数"
+              value={formatCompact(stats.totalTokens)}
+            />
+            <StatCard
+              label="活跃天数"
+              value={stats.activeDays.toLocaleString()}
+            />
+            <StatCard
+              label="当前连续天数"
+              value={`${stats.currentStreak} 天`}
+            />
+            <StatCard
+              label="最长连续天数"
+              value={`${stats.longestStreak} 天`}
+            />
+            <StatCard
+              label="高峰时段"
+              value={stats.peakHour === null ? "—" : formatHour(stats.peakHour)}
+            />
+            <StatCard label="常用模型" value={favoriteModel} />
           </div>
           <Heatmap days={rangedDays} />
         </>
       ) : (
         <>
-          <TokenChart days={rangedDays} orderedModels={orderedModels} modelColor={modelColor} />
+          <TokenChart
+            days={rangedDays}
+            orderedModels={orderedModels}
+            modelColor={modelColor}
+          />
           <div className="mt-4 border-t border-border pt-3">
             <ModelLegend models={stats.models} modelColor={modelColor} />
           </div>
         </>
       )}
     </div>
-  )
+  );
 }

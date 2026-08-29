@@ -1,12 +1,12 @@
-import { useAppStore } from '../store'
-import { agentEngineLabel } from '../../../shared/agent-engine-label'
-import { ChatInput } from './chat-input'
-import { ChatProjectPicker } from './chat-project-picker'
-import { CouncilPanels } from './council-panels'
-import { MessageBubble, ToolGroupBubble } from './message-bubble'
-import { StreamingBubble } from './streaming-bubble'
-import { ChatSearch } from './chat-search'
-import { ResizeHandle } from './resize-handle'
+import { useAppStore } from "../store";
+import { agentEngineLabel } from "../../../shared/agent-engine-label";
+import { ChatInput } from "./chat-input";
+import { ChatProjectPicker } from "./chat-project-picker";
+import { CouncilPanels } from "./council-panels";
+import { MessageBubble, ToolGroupBubble } from "./message-bubble";
+import { StreamingBubble } from "./streaming-bubble";
+import { ChatSearch } from "./chat-search";
+import { ResizeHandle } from "./resize-handle";
 import {
   DEFAULT_FILE_PANE_WIDTH,
   DEFAULT_SIDE_PANEL_WIDTH,
@@ -15,18 +15,18 @@ import {
   MIN_FILE_PANE_WIDTH,
   clamp,
   resolveSidePanelMetrics,
-} from './chat-panel-widths'
+} from "./chat-panel-widths";
 
-import { groupToolMessages, prepareChatMessages } from '../message-grouping'
-import { NowContext } from '../utils/relative-time'
-import { FileTree, FileSearch, FilePreview } from './file-tree'
-import { ImageViewer } from './image-viewer'
-import { DiffViewer } from './diff-viewer'
-import { TerminalPanel } from './terminal'
-import { useChatScroll, useGlobalWorkflowOpen } from '../hooks'
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { clsx } from 'clsx'
-import piLogo from '../assets/pi-logo.svg'
+import { groupToolMessages, prepareChatMessages } from "../message-grouping";
+import { NowContext } from "../utils/relative-time";
+import { FileTree, FileSearch, FilePreview } from "./file-tree";
+import { ImageViewer } from "./image-viewer";
+import { DiffViewer } from "./diff-viewer";
+import { TerminalPanel } from "./terminal";
+import { useChatScroll, useGlobalWorkflowOpen } from "../hooks";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { clsx } from "clsx";
+import piLogo from "../assets/pi-logo.svg";
 import {
   FolderTree,
   GitCompare,
@@ -38,125 +38,137 @@ import {
   ChevronDown,
   Loader2,
   Workflow as WorkflowIcon,
-} from 'lucide-react'
+} from "lucide-react";
 
 // Fallback padding when the composer has not measured yet (~idle pill + gradient).
-const DEFAULT_COMPOSER_PAD_PX = 144
+const DEFAULT_COMPOSER_PAD_PX = 144;
 
 export function ChatPanel(): React.JSX.Element {
-  const messages = useAppStore((state) => state.messages)
-  const sessionLoading = useAppStore((state) => state.sessionLoading)
-  const isStreaming = useAppStore((state) => state.isStreaming)
-  const reattachedMidTurn = useAppStore((state) => state.reattachedMidTurn)
-  const composerWrapRef = useRef<HTMLDivElement>(null)
-  const [composerPadPx, setComposerPadPx] = useState(DEFAULT_COMPOSER_PAD_PX)
+  const messages = useAppStore((state) => state.messages);
+  const sessionLoading = useAppStore((state) => state.sessionLoading);
+  const isStreaming = useAppStore((state) => state.isStreaming);
+  const reattachedMidTurn = useAppStore((state) => state.reattachedMidTurn);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  const [composerPadPx, setComposerPadPx] = useState(DEFAULT_COMPOSER_PAD_PX);
 
   // Drive message-list bottom padding from the real floating composer height so
   // a tall draft / attachments row never permanently covers the last message.
   useEffect(() => {
-    const el = composerWrapRef.current
-    if (!el) return
+    const el = composerWrapRef.current;
+    if (!el) return;
     const measure = (): void => {
-      setComposerPadPx(Math.max(el.offsetHeight, DEFAULT_COMPOSER_PAD_PX))
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-  const streamingContent = useAppStore((state) => state.streamingContent)
-  const streamingThinking = useAppStore((state) => state.streamingThinking)
-  const streamingToolCalls = useAppStore((state) => state.streamingToolCalls)
-  const piStatus = useAppStore((state) => state.piStatus)
-  const engineLabel = useAppStore((state) => agentEngineLabel(state.piEngine) ?? 'Pi')
-  const terminalOpen = useAppStore((state) => state.terminalOpen)
-  const reviewOpen = useAppStore((state) => state.reviewOpen)
-  const sidebarOpen = useAppStore((state) => state.sidebarOpen)
-  const fileSearchOpen = useAppStore((state) => state.fileSearchOpen)
-  const toggleFileSearch = useAppStore((state) => state.toggleFileSearch)
-  const previewTarget = useAppStore((state) => state.previewTarget)
-  const workflowPanelOpen = useAppStore((state) => state.workflowPanelOpen)
+      setComposerPadPx(Math.max(el.offsetHeight, DEFAULT_COMPOSER_PAD_PX));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const streamingContent = useAppStore((state) => state.streamingContent);
+  const streamingThinking = useAppStore((state) => state.streamingThinking);
+  const streamingToolCalls = useAppStore((state) => state.streamingToolCalls);
+  const piStatus = useAppStore((state) => state.piStatus);
+  const engineLabel = useAppStore(
+    (state) => agentEngineLabel(state.piEngine) ?? "Pi",
+  );
+  const terminalOpen = useAppStore((state) => state.terminalOpen);
+  const reviewOpen = useAppStore((state) => state.reviewOpen);
+  const sidebarOpen = useAppStore((state) => state.sidebarOpen);
+  const fileSearchOpen = useAppStore((state) => state.fileSearchOpen);
+  const toggleFileSearch = useAppStore((state) => state.toggleFileSearch);
+  const previewTarget = useAppStore((state) => state.previewTarget);
+  const workflowPanelOpen = useAppStore((state) => state.workflowPanelOpen);
 
   // sidePanel lives in the store so it survives view switches (e.g. Settings
   // round-trip). Widths stay local — resetting them on remount is benign.
-  const sidePanel = useAppStore((state) => state.chatSidePanel)
-  const setSidePanel = useAppStore((state) => state.setChatSidePanel)
-  const [sidePanelWidth, setSidePanelWidth] = useState(DEFAULT_SIDE_PANEL_WIDTH)
-  const [filePaneWidth, setFilePaneWidth] = useState(DEFAULT_FILE_PANE_WIDTH)
+  const sidePanel = useAppStore((state) => state.chatSidePanel);
+  const setSidePanel = useAppStore((state) => state.setChatSidePanel);
+  const [sidePanelWidth, setSidePanelWidth] = useState(
+    DEFAULT_SIDE_PANEL_WIDTH,
+  );
+  const [filePaneWidth, setFilePaneWidth] = useState(DEFAULT_FILE_PANE_WIDTH);
 
   // One shared clock for all relative-time labels — refresh every 30s so
   // "5 minutes ago" stays current without each label owning a timer.
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000)
-    return () => clearInterval(id)
-  }, [])
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
-  const currentView = useAppStore((state) => state.currentView)
+  const currentView = useAppStore((state) => state.currentView);
   // The global workflow view replaces the main pane while this panel stays
   // mounted behind `display: none`, so "chat is on screen" needs both checks.
   // Without the second one the scroll hook never sees the hidden→shown edge and
   // cannot re-anchor the reading position when the workflow view closes.
-  const globalWorkflowOpen = useGlobalWorkflowOpen()
-  const chatVisible = currentView === 'chat' && !globalWorkflowOpen
-  const { scrollRef, onScroll, atBottom, scrollToBottom } = useChatScroll(chatVisible)
+  const globalWorkflowOpen = useGlobalWorkflowOpen();
+  const chatVisible = currentView === "chat" && !globalWorkflowOpen;
+  const { scrollRef, onScroll, atBottom, scrollToBottom } =
+    useChatScroll(chatVisible);
 
   // In-conversation search (Ctrl/Cmd+F while in chat). The nonce bumps on every
   // press so re-triggering refocuses/selects the already-open input.
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchNonce, setSearchNonce] = useState(0)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchNonce, setSearchNonce] = useState(0);
   useEffect(() => {
     // Same visibility test as the scroll hook: a hidden panel must not capture
     // the shortcut and open its find bar off screen.
-    if (!chatVisible) return
+    if (!chatVisible) return;
     const onKey = (e: KeyboardEvent) => {
       // The 'F' (uppercase) case also covers Caps Lock. Ctrl/Cmd+F opens the
       // in-conversation find bar; adding Shift opens the workspace file-search
       // modal. Both handled here at the window level so they fire regardless of
       // focus (the file-search shortcut used to be composer-scoped, so it only
       // worked while the textarea had focus).
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault()
+      if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
         if (e.shiftKey) {
-          useAppStore.getState().toggleFileSearch()
+          useAppStore.getState().toggleFileSearch();
         } else {
-          setSearchOpen(true)
-          setSearchNonce((n) => n + 1)
+          setSearchOpen(true);
+          setSearchNonce((n) => n + 1);
         }
       }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [chatVisible])
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chatVisible]);
 
   // Fold consecutive tool-call/result runs into collapsed groups. Memoized so
   // the grouping only recomputes when the message list changes, and so lone
   // MessageBubbles keep their stable refs (no markdown re-parse on re-render).
-  const renderItems = useMemo(() => groupToolMessages(prepareChatMessages(messages)), [messages])
+  const renderItems = useMemo(
+    () => groupToolMessages(prepareChatMessages(messages)),
+    [messages],
+  );
 
   const handleRetry = useCallback(async (messageId: string) => {
     // Read from the store so this callback stays referentially stable, keeping
     // the memoized MessageBubble list from re-rendering when messages change.
-    const { messages: current, sendPrompt } = useAppStore.getState()
-    const msg = current.find((m) => m.id === messageId)
-    if (msg?.role === 'user') {
-      await sendPrompt(msg.content)
+    const { messages: current, sendPrompt } = useAppStore.getState();
+    const msg = current.find((m) => m.id === messageId);
+    if (msg?.role === "user") {
+      await sendPrompt(msg.content);
     }
-  }, [])
+  }, []);
 
-  const activeWorkspace = useAppStore((state) => state.activeWorkspace)
-  const showSidePanel = sidePanel !== null || previewTarget !== null
-  const showFileTree = sidePanel === 'files'
-  const showImage = previewTarget?.kind === 'image' && sidePanel !== 'diff'
-  const showEditor = previewTarget?.kind === 'code' && sidePanel !== 'diff'
-  const showDiff = sidePanel === 'diff'
+  const activeWorkspace = useAppStore((state) => state.activeWorkspace);
+  const showSidePanel = sidePanel !== null || previewTarget !== null;
+  const showFileTree = sidePanel === "files";
+  const showImage = previewTarget?.kind === "image" && sidePanel !== "diff";
+  const showEditor = previewTarget?.kind === "code" && sidePanel !== "diff";
+  const showDiff = sidePanel === "diff";
   const {
     fileTreeOnly: showFileTreeOnly,
     minSidePanelWidth,
     contentWidth: sidePanelContentWidth,
     filePaneWidth: effectiveFilePaneWidth,
     maxFilePaneWidth,
-  } = resolveSidePanelMetrics({ showFileTree, showEditor, showImage }, sidePanelWidth, filePaneWidth)
+  } = resolveSidePanelMetrics(
+    { showFileTree, showEditor, showImage },
+    sidePanelWidth,
+    filePaneWidth,
+  );
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -168,7 +180,10 @@ export function ChatPanel(): React.JSX.Element {
             <div className="flex items-center gap-0.5">
               {/* Workspace path — always visible */}
               {activeWorkspace && (
-                <div className="flex items-center gap-1.5 mr-2 px-2 py-0.5 rounded bg-card/60" title={activeWorkspace.path}>
+                <div
+                  className="flex items-center gap-1.5 mr-2 px-2 py-0.5 rounded bg-card/60"
+                  title={activeWorkspace.path}
+                >
                   <FolderTree size={12} className="text-dim shrink-0" />
                   <span className="text-xs text-muted max-w-[300px] truncate">
                     {activeWorkspace.name}: {activeWorkspace.path}
@@ -176,34 +191,44 @@ export function ChatPanel(): React.JSX.Element {
                 </div>
               )}
               <ToolbarButton
-                icon={sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
+                icon={
+                  sidebarOpen ? (
+                    <PanelLeftClose size={14} />
+                  ) : (
+                    <PanelLeft size={14} />
+                  )
+                }
                 active={false}
                 onClick={() => useAppStore.getState().toggleSidebar()}
-                title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                title={sidebarOpen ? "隐藏侧边栏" : "显示侧边栏"}
               />
               <ToolbarButton
                 icon={<ShieldCheck size={14} />}
                 active={reviewOpen}
                 onClick={() => useAppStore.getState().toggleReview()}
-                title="Review panel"
+                title="审查面板"
               />
               <ToolbarButton
                 icon={<FolderTree size={14} />}
-                active={sidePanel === 'files'}
-                onClick={() => void setSidePanel(sidePanel === 'files' ? null : 'files')}
-                title="File tree"
+                active={sidePanel === "files"}
+                onClick={() =>
+                  void setSidePanel(sidePanel === "files" ? null : "files")
+                }
+                title="文件树"
               />
               <ToolbarButton
                 icon={<GitCompare size={14} />}
-                active={sidePanel === 'diff'}
-                onClick={() => void setSidePanel(sidePanel === 'diff' ? null : 'diff')}
-                title="Diff viewer"
+                active={sidePanel === "diff"}
+                onClick={() =>
+                  void setSidePanel(sidePanel === "diff" ? null : "diff")
+                }
+                title="差异查看器"
               />
               <ToolbarButton
                 icon={<Terminal size={14} />}
                 active={terminalOpen}
                 onClick={() => useAppStore.getState().toggleTerminal()}
-                title="Terminal"
+                title="终端"
               />
               <ToolbarButton
                 icon={<WorkflowIcon size={14} />}
@@ -214,12 +239,16 @@ export function ChatPanel(): React.JSX.Element {
                   // THAT session's runs (scoped by Pi's header UUID, the exact
                   // identifier persisted runs carry). The global list is only a
                   // fallback for the no-session state; closing preserves scope.
-                  const state = useAppStore.getState()
-                  if (state.workflowPanelOpen) state.setWorkflowPanelOpen(false)
-                  else if (state.sessionState?.sessionId) state.openWorkflowRunsForSession(state.sessionState.sessionId)
-                  else state.setWorkflowPanelOpen(true)
+                  const state = useAppStore.getState();
+                  if (state.workflowPanelOpen)
+                    state.setWorkflowPanelOpen(false);
+                  else if (state.sessionState?.sessionId)
+                    state.openWorkflowRunsForSession(
+                      state.sessionState.sessionId,
+                    );
+                  else state.setWorkflowPanelOpen(true);
                 }}
-                title="Workflow runs"
+                title="工作流运行记录"
               />
             </div>
           </div>
@@ -234,7 +263,7 @@ export function ChatPanel(): React.JSX.Element {
             )}
             {(() => {
               const isEmptyChat =
-                !sessionLoading && messages.length === 0 && !isStreaming
+                !sessionLoading && messages.length === 0 && !isStreaming;
 
               // Empty session: Codex-style center prompt + project picker (sidebar chrome).
               if (isEmptyChat) {
@@ -246,19 +275,21 @@ export function ChatPanel(): React.JSX.Element {
                         alt="Pi Desktop"
                         className="mx-auto mb-4 block h-14 w-14"
                       />
-                      <h2 className="text-2xl font-semibold text-primary">What should {engineLabel} work on?</h2>
+                      <h2 className="text-2xl font-semibold text-primary">
+                        让 {engineLabel} 做什么？
+                      </h2>
                       <p className="mt-1 text-sm text-dim">
-                        {piStatus === 'running'
-                          ? 'Pick a project and describe what you want done.'
-                          : piStatus === 'starting'
-                            ? `Starting ${engineLabel} agent…`
-                            : piStatus === 'error'
-                              ? `Failed to start ${engineLabel}. Check settings.`
-                              : `Choose a project — ${engineLabel} starts when you send.`}
+                        {piStatus === "running"
+                          ? "选择一个项目，并描述你希望完成的工作。"
+                          : piStatus === "starting"
+                            ? `正在启动 ${engineLabel} 代理…`
+                            : piStatus === "error"
+                              ? `${engineLabel} 启动失败，请检查设置。`
+                              : `选择一个项目，发送消息后 ${engineLabel} 将启动。`}
                       </p>
                     </div>
                     <div className="w-full max-w-3xl">
-                      {piStatus === 'running' && (
+                      {piStatus === "running" && (
                         <div className="mb-4 flex flex-wrap justify-center gap-2 px-4">
                           {EXAMPLE_PROMPTS.map((prompt) => (
                             <button
@@ -266,7 +297,9 @@ export function ChatPanel(): React.JSX.Element {
                               type="button"
                               onClick={() => {
                                 // Fill the composer only — never start a turn from a chip misclick.
-                                useAppStore.getState().insertPrompt(prompt, true)
+                                useAppStore
+                                  .getState()
+                                  .insertPrompt(prompt, true);
                               }}
                               className="rounded-lg border border-border-strong px-3 py-1.5 text-xs text-muted hover:border-border-strong-hover hover:text-secondary transition-colors"
                             >
@@ -281,16 +314,22 @@ export function ChatPanel(): React.JSX.Element {
                       </div>
                     </div>
                   </div>
-                )
+                );
               }
 
               return (
                 <>
-                  <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto">
+                  <div
+                    ref={scrollRef}
+                    onScroll={onScroll}
+                    className="flex-1 overflow-y-auto"
+                  >
                     {sessionLoading && messages.length === 0 ? (
                       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-dim">
                         <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
-                        {piStatus === 'running' ? 'Loading session…' : 'Starting agent…'}
+                        {piStatus === "running"
+                          ? "正在加载会话…"
+                          : "正在启动代理…"}
                       </div>
                     ) : (
                       <NowContext.Provider value={now}>
@@ -299,7 +338,7 @@ export function ChatPanel(): React.JSX.Element {
                           style={{ paddingBottom: composerPadPx }}
                         >
                           {renderItems.map((item) =>
-                            item.kind === 'toolGroup' ? (
+                            item.kind === "toolGroup" ? (
                               <ToolGroupBubble
                                 key={item.id}
                                 title={item.title}
@@ -312,7 +351,7 @@ export function ChatPanel(): React.JSX.Element {
                                 message={item.message}
                                 onRetry={handleRetry}
                               />
-                            )
+                            ),
                           )}
                           {isStreaming && (
                             <StreamingBubble
@@ -331,8 +370,8 @@ export function ChatPanel(): React.JSX.Element {
                       onClick={scrollToBottom}
                       className="absolute left-1/2 z-20 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border-strong bg-card/90 text-secondary shadow-lg shadow-black/30 backdrop-blur transition-colors hover:bg-elevated hover:text-primary"
                       style={{ bottom: composerPadPx + 12 }}
-                      title="Scroll to bottom"
-                      aria-label="Scroll to bottom"
+                      title="滚动到底部"
+                      aria-label="滚动到底部"
                     >
                       <ChevronDown size={16} />
                     </button>
@@ -348,10 +387,15 @@ export function ChatPanel(): React.JSX.Element {
                     {reattachedMidTurn && (
                       <div className="pointer-events-auto mx-auto mb-2 w-full max-w-5xl px-4">
                         <div className="flex items-center gap-2.5 rounded-md bg-accent px-4 py-2.5 text-sm text-white shadow-lg shadow-black/30">
-                          <Loader2 size={16} className="shrink-0 animate-spin" />
-                          <span className="shrink-0 font-medium">{engineLabel} is still working in this session.</span>
+                          <Loader2
+                            size={16}
+                            className="shrink-0 animate-spin"
+                          />
+                          <span className="shrink-0 font-medium">
+                            {engineLabel} 仍在此会话中工作。
+                          </span>
                           <span className="min-w-0 flex-1 truncate text-white/80">
-                            The response appears here the moment it finishes.
+                            完成后响应会立即显示在这里。
                           </span>
                         </div>
                       </div>
@@ -359,40 +403,50 @@ export function ChatPanel(): React.JSX.Element {
                     <ChatInput />
                   </div>
                 </>
-              )
+              );
             })()}
           </div>
         </div>
 
         {/* Side panel */}
         {showSidePanel && (
-          <div className="relative flex border-l border-border bg-app" style={{ width: sidePanelContentWidth }}>
+          <div
+            className="relative flex border-l border-border bg-app"
+            style={{ width: sidePanelContentWidth }}
+          >
             <ResizeHandle
               onResize={(delta) => {
                 if (showFileTreeOnly) {
                   // Same ceiling the render uses, so the state cannot outrun it.
                   setFilePaneWidth((width) =>
-                    clamp(width - delta, MIN_FILE_PANE_WIDTH, maxFilePaneWidth)
-                  )
-                  return
+                    clamp(width - delta, MIN_FILE_PANE_WIDTH, maxFilePaneWidth),
+                  );
+                  return;
                 }
 
                 setSidePanelWidth((width) =>
-                  clamp(width - delta, minSidePanelWidth, MAX_SIDE_PANEL_WIDTH)
-                )
+                  clamp(width - delta, minSidePanelWidth, MAX_SIDE_PANEL_WIDTH),
+                );
               }}
             />
             <div className="flex min-w-0 flex-1 overflow-hidden">
               {showFileTree && (
                 <>
-                  <div className="flex min-w-0 shrink-0 flex-col overflow-hidden" style={{ width: effectiveFilePaneWidth }}>
+                  <div
+                    className="flex min-w-0 shrink-0 flex-col overflow-hidden"
+                    style={{ width: effectiveFilePaneWidth }}
+                  >
                     <FileTree />
                   </div>
                   {(showEditor || showImage) && (
                     <ResizeHandle
                       onResize={(delta) =>
                         setFilePaneWidth((width) =>
-                          clamp(width + delta, MIN_FILE_PANE_WIDTH, maxFilePaneWidth)
+                          clamp(
+                            width + delta,
+                            MIN_FILE_PANE_WIDTH,
+                            maxFilePaneWidth,
+                          ),
                         )
                       }
                     />
@@ -407,10 +461,10 @@ export function ChatPanel(): React.JSX.Element {
               {showEditor && (
                 <div
                   className={clsx(
-                    'flex flex-1 flex-col overflow-hidden',
+                    "flex flex-1 flex-col overflow-hidden",
                     // Divider only when the file tree is beside it; alone, the
                     // outer panel's border-l is the left edge (avoids doubling).
-                    showFileTree && 'border-l border-border'
+                    showFileTree && "border-l border-border",
                   )}
                   // The same constant the file pane's ceiling reserves for.
                   style={{ minWidth: MIN_EDITOR_PANE_WIDTH }}
@@ -431,7 +485,7 @@ export function ChatPanel(): React.JSX.Element {
               <button
                 onClick={() => setSidePanel(null)}
                 className="absolute top-1 right-1 z-10 rounded p-1 text-faint hover:text-muted"
-                title="Close file tree"
+                title="关闭文件树"
               >
                 <X size={12} />
               </button>
@@ -446,7 +500,7 @@ export function ChatPanel(): React.JSX.Element {
       {/* File search modal */}
       <FileSearch isOpen={fileSearchOpen} onClose={toggleFileSearch} />
     </div>
-  )
+  );
 }
 
 function ToolbarButton({
@@ -456,32 +510,32 @@ function ToolbarButton({
   title,
   workflowToggle = false,
 }: {
-  icon: React.ReactNode
-  active: boolean
-  onClick: () => void
-  title: string
-  workflowToggle?: boolean
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  workflowToggle?: boolean;
 }): React.JSX.Element {
   return (
     <button
       onClick={onClick}
-      data-workflow-toggle={workflowToggle ? 'true' : undefined}
+      data-workflow-toggle={workflowToggle ? "true" : undefined}
       className={clsx(
-        'rounded p-1 transition-colors',
+        "rounded p-1 transition-colors",
         active
-          ? 'bg-card text-primary'
-          : 'hover:bg-highlight text-dim hover:text-secondary'
+          ? "bg-card text-primary"
+          : "hover:bg-highlight text-dim hover:text-secondary",
       )}
       title={title}
     >
       {icon}
     </button>
-  )
+  );
 }
 
 const EXAMPLE_PROMPTS = [
-  'Explain this project structure',
-  'Find all TODO comments',
-  'Run the test suite',
-  'Help me debug an error',
-]
+  "解释这个项目的结构",
+  "找出所有 TODO 注释",
+  "运行测试套件",
+  "帮我调试一个错误",
+];

@@ -1,19 +1,24 @@
-import { clsx } from 'clsx'
-import { BUILTIN_SOURCE, type CommandGroup, type PiCommand } from '../../../shared/pi-command'
+import { clsx } from "clsx";
+import {
+  BUILTIN_SOURCE,
+  type CommandGroup,
+  type PiCommand,
+} from "../../../shared/pi-command";
+import { localizedCommandGroup, localizedSource } from "../utils/ui-text";
 
 const SOURCE_BADGE: Record<string, string> = {
-  skill: 'bg-special-bg text-special',
-  prompt: 'bg-accent-bg text-accent-fg',
-  [BUILTIN_SOURCE]: 'bg-warning-bg text-warning',
-  extension: 'bg-success-bg text-success',
-}
+  skill: "bg-special-bg text-special",
+  prompt: "bg-accent-bg text-accent-fg",
+  [BUILTIN_SOURCE]: "bg-warning-bg text-warning",
+  extension: "bg-success-bg text-success",
+};
 
 interface CommandResultsProps {
-  grouped: CommandGroup[]
-  flat: PiCommand[]
-  activeIndex: number
-  onSelect: (cmd: PiCommand) => void
-  onHover: (index: number) => void
+  grouped: CommandGroup[];
+  flat: PiCommand[];
+  activeIndex: number;
+  onSelect: (cmd: PiCommand) => void;
+  onHover: (index: number) => void;
 }
 
 /**
@@ -33,10 +38,10 @@ export function CommandResults({
       {grouped.map((group) => (
         <div key={group.label}>
           <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-faint">
-            {group.label}
+            {localizedCommandGroup(group.label)}
           </div>
           {group.items.map((cmd) => {
-            const index = flat.indexOf(cmd)
+            const index = flat.indexOf(cmd);
             return (
               <button
                 key={`${cmd.source}:${cmd.name}`}
@@ -44,27 +49,31 @@ export function CommandResults({
                 onClick={() => onSelect(cmd)}
                 onMouseEnter={() => onHover(index)}
                 className={clsx(
-                  'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-                  index === activeIndex ? 'bg-card' : 'hover:bg-surface-hover/50'
+                  "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+                  index === activeIndex
+                    ? "bg-card"
+                    : "hover:bg-surface-hover/50",
                 )}
               >
                 <span
                   className={clsx(
-                    'shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase',
-                    SOURCE_BADGE[cmd.source] ?? 'bg-card text-muted'
+                    "shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase",
+                    SOURCE_BADGE[cmd.source] ?? "bg-card text-muted",
                   )}
                 >
-                  {cmd.source}
+                  {localizedSource(cmd.source)}
                 </span>
                 <span className="truncate text-sm text-primary">
                   {cmd.source === BUILTIN_SOURCE ? `/${cmd.name}` : cmd.name}
                 </span>
-                <span className="ml-auto line-clamp-1 text-xs text-dim">{cmd.description}</span>
+                <span className="ml-auto line-clamp-1 text-xs text-dim">
+                  {cmd.description}
+                </span>
               </button>
-            )
+            );
           })}
         </div>
       ))}
     </>
-  )
+  );
 }

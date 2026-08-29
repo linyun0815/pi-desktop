@@ -1,117 +1,166 @@
 #!/usr/bin/env node
 /**
- * Pi Desktop postinstall — runs electron-rebuild for native modules and
- * verifies that Electron's binary was actually placed on disk.
+ * Pi Desktop postinstall validates the native node-pty files installed by the
+ * package and verifies that Electron's binary was placed on disk.
+ *
+ * node-pty 1.1 uses Node-API and ships prebuilt binaries for Windows and macOS.
+ * Linux builds its Node-API binary during node-pty's own install hook. Rebuilding
+ * either form against Electron is unnecessary and, on Windows, would require
+ * Visual Studio's optional Spectre-mitigated libraries.
  *
  * Steps:
- *   1. Run electron-builder install-app-deps to rebuild native modules
- *      against Electron's ABI.
- *   2. Verify the Electron binary was actually placed in
- *      node_modules/electron/dist. If the download was silently skipped,
- *      automatically re-run Electron's own install.js. If that still
- *      doesn't work, surface a clear error with next steps.
- *
- * Windows note: node-pty's bundled conpty requires Microsoft's
- * Spectre-mitigated libraries. If the rebuild fails with MSB8040,
- * install the matching Spectre libs from the Visual Studio Installer
- * (Individual components -> search "Spectre"). VS Build Tools 2022
- * stable ships them for the v143 toolset; some newer preview channels
- * with the v180 toolset do not yet, so prefer 2022 stable.
+ *   1. Verify that node-pty has a complete native binary set for this platform.
+ *   2. Verify the Electron binary. If its download was silently skipped,
+ *      automatically re-run Electron's own install.js and report next steps if
+ *      that still fails.
  */
 
-const { spawnSync } = require('child_process')
-const fs = require('fs')
-const path = require('path')
+const { spawnSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 
-const ROOT = path.resolve(__dirname, '..')
-const IS_WINDOWS = process.platform === 'win32'
+const ROOT = path.resolve(__dirname, "..");
 
 function log(msg) {
-  console.log(`[postinstall] ${msg}`)
+  console.log(`[postinstall] ${msg}`);
 }
 
-/**
- * Build the environment for native-rebuild child processes.
- *
- * On Windows, node-pty's bundled winpty.gyp shells out with
- * `cmd /c "cd shared && GetCommitHash.bat"`. When the machine has the
- * `NoDefaultCurrentDirectoryInExePath` environment variable set (common on
- * locked-down / enterprise Windows), cmd.exe stops searching the current
- * directory for executables, so the batch file is "not recognized" and the
- * gyp configure step fails before the compiler is ever invoked. Removing the
- * variable for our child processes restores the default lookup behavior.
- */
-function buildEnv() {
-  if (!IS_WINDOWS) return process.env
-  const env = { ...process.env }
-  // process.env keys are case-insensitive on Windows, but a plain object copy
-  // is not — delete every casing so the child never inherits it.
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() === 'nodefaultcurrentdirectoryinexepath') {
-      delete env[key]
-    }
+function requiredNodePtyFiles(platform) {
+  if (platform === "win32") {
+    return [
+      "conpty.node",
+      "conpty_console_list.node",
+      "pty.node",
+      "winpty-agent.exe",
+      "winpty.dll",
+      "conpty/conpty.dll",
+      "conpty/OpenConsole.exe",
+    ];
   }
-  return env
+  if (platform === "darwin") return ["pty.node", "spawn-helper"];
+  return ["pty.node"];
 }
 
-function rebuildNativeModules() {
-  log('running electron-builder install-app-deps...')
-  const result = spawnSync('npx', ['electron-builder', 'install-app-deps'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-    shell: IS_WINDOWS,
-    env: buildEnv(),
-  })
-  if (result.status !== 0) {
-    if (IS_WINDOWS) {
-      console.error('')
-      console.error('[postinstall] native rebuild failed on Windows.')
-      console.error('Most common cause: missing Spectre-mitigated libs for node-pty.')
-      console.error('Fix: open Visual Studio Installer -> Modify -> Individual components,')
-      console.error('search "Spectre", and install the libs for your toolset (v143 is the')
-      console.error('VS 2022 stable toolset). Then re-run `npm install`.')
-      console.error('')
-    }
-    process.exit(result.status ?? 1)
+function findNodePtyBinaryDirectory(root, platform, arch) {
+  const nodePtyRoot = path.join(root, "node_modules", "node-pty");
+  const candidates = [
+    path.join(nodePtyRoot, "build", "Release"),
+    path.join(nodePtyRoot, "build", "Debug"),
+    path.join(nodePtyRoot, "prebuilds", `${platform}-${arch}`),
+  ];
+  const requiredFiles = requiredNodePtyFiles(platform);
+  return candidates.find((directory) =>
+    requiredFiles.every((file) => fs.existsSync(path.join(directory, file))),
+  );
+}
+
+function verifyNodePtyNativeFiles() {
+  const platform = process.env.npm_config_platform || process.platform;
+  const arch = process.env.npm_config_arch || process.arch;
+  const binaryDirectory = findNodePtyBinaryDirectory(ROOT, platform, arch);
+  if (binaryDirectory) {
+    log(
+      `node-pty native files present (${path.relative(ROOT, binaryDirectory)})`,
+    );
+    return;
+  }
+
+  console.error("");
+  console.error(
+    `[postinstall] node-pty native files are missing for ${platform}-${arch}.`,
+  );
+  console.error("Reinstall node-pty without forcing a source build:");
+  console.error("  npm config delete build-from-source");
+  console.error("  npm install");
+  console.error(
+    "For an unsupported platform, install the native compiler prerequisites and run:",
+  );
+  console.error("  npm rebuild node-pty");
+  console.error("");
+  process.exit(1);
+}
+
+function electronBinaryPath(root = ROOT, env = process.env) {
+  const electronRoot = path.join(root, "node_modules", "electron");
+  const pathTxt = path.join(electronRoot, "path.txt");
+  const distDir =
+    env.ELECTRON_OVERRIDE_DIST_PATH || path.join(electronRoot, "dist");
+  try {
+    const relativePath = fs.readFileSync(pathTxt, "utf8").trim();
+    return relativePath ? path.join(distDir, relativePath) : null;
+  } catch {
+    return null;
   }
 }
 
 function verifyElectronBinary() {
-  const pathTxt = path.join(ROOT, 'node_modules', 'electron', 'path.txt')
-  const distDir = path.join(ROOT, 'node_modules', 'electron', 'dist')
-
-  if (fs.existsSync(pathTxt) && fs.existsSync(distDir)) {
-    log('electron binary present')
-    return
+  const binaryPath = electronBinaryPath();
+  if (binaryPath && fs.existsSync(binaryPath)) {
+    log("electron binary present");
+    return;
   }
 
-  log('electron binary missing — re-running electron/install.js')
-  const installJs = path.join(ROOT, 'node_modules', 'electron', 'install.js')
+  log("electron binary missing — re-running electron/install.js");
+  const installJs = path.join(ROOT, "node_modules", "electron", "install.js");
   if (!fs.existsSync(installJs)) {
-    console.error('[postinstall] electron package not installed at all; run `npm install electron` and retry')
-    process.exit(1)
+    console.error("");
+    console.error("[postinstall] the Electron package is missing.");
+    if (
+      process.env.NODE_ENV === "production" ||
+      process.env.npm_config_omit?.split(",").includes("dev")
+    ) {
+      console.error(
+        "Development dependencies were omitted. Pi Desktop source builds require them:",
+      );
+      console.error("  npm install --include=dev");
+    } else {
+      console.error("Run `npm install electron --save-dev` and retry.");
+    }
+    console.error("");
+    process.exit(1);
   }
 
   const result = spawnSync(process.execPath, [installJs], {
     cwd: path.dirname(installJs),
-    stdio: 'inherit',
-  })
+    stdio: "inherit",
+  });
 
-  if (result.status !== 0 || !fs.existsSync(pathTxt)) {
-    console.error('')
-    console.error('[postinstall] electron binary still missing after install.js retry.')
-    console.error('Common causes:')
-    console.error('  - Antivirus blocking the extraction (add the repo and ~/AppData/Local/electron to exclusions)')
-    console.error('  - Corporate proxy blocking github.com (set ELECTRON_MIRROR to your internal mirror)')
-    console.error('  - Disk space or permission issues')
-    console.error('')
-    console.error('Manual recovery:')
-    console.error('  cd node_modules/electron && node install.js')
-    process.exit(1)
+  const binaryPathAfterInstall = electronBinaryPath();
+  if (
+    result.status !== 0 ||
+    !binaryPathAfterInstall ||
+    !fs.existsSync(binaryPathAfterInstall)
+  ) {
+    console.error("");
+    console.error(
+      "[postinstall] electron binary still missing after install.js retry.",
+    );
+    console.error("Common causes:");
+    console.error(
+      "  - Antivirus blocking the extraction (add the repo and ~/AppData/Local/electron to exclusions)",
+    );
+    console.error(
+      "  - Corporate proxy blocking github.com (set ELECTRON_MIRROR to your internal mirror)",
+    );
+    console.error("  - Disk space or permission issues");
+    console.error("");
+    console.error("Manual recovery:");
+    console.error("  cd node_modules/electron && node install.js");
+    process.exit(1);
   }
 
-  log('electron binary downloaded and extracted')
+  log("electron binary downloaded and extracted");
 }
 
-rebuildNativeModules()
-verifyElectronBinary()
+function main() {
+  verifyNodePtyNativeFiles();
+  verifyElectronBinary();
+}
+
+if (require.main === module) main();
+
+module.exports = {
+  findNodePtyBinaryDirectory,
+  requiredNodePtyFiles,
+  electronBinaryPath,
+};

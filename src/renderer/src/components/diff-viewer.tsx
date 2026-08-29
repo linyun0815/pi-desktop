@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useAppStore } from '../store'
-import { DEFAULT_SETTINGS } from '../../../shared/default-settings'
-import { clsx } from 'clsx'
+import { useCallback, useEffect, useState } from "react";
+import { useAppStore } from "../store";
+import { DEFAULT_SETTINGS } from "../../../shared/default-settings";
+import { clsx } from "clsx";
 import {
   AlertTriangle,
   GitCompare,
@@ -11,65 +11,67 @@ import {
   ChevronRight,
   X,
   Loader2,
-} from 'lucide-react'
-import { formatIpcError } from '../utils/ipc-error'
-import { GitConveyorActions } from './git-conveyor-actions'
+} from "lucide-react";
+import { formatUiError } from "../utils/ipc-error";
+import { GitConveyorActions } from "./git-conveyor-actions";
 
 interface DiffLine {
-  type: 'add' | 'remove' | 'context' | 'header' | 'hunk'
-  content: string
-  oldLine?: number
-  newLine?: number
+  type: "add" | "remove" | "context" | "header" | "hunk";
+  content: string;
+  oldLine?: number;
+  newLine?: number;
 }
 
 interface DiffFileBlock {
-  oldPath: string
-  newPath: string
-  isNew: boolean
-  isDeleted: boolean
-  hunks: DiffLine[][]
+  oldPath: string;
+  newPath: string;
+  isNew: boolean;
+  isDeleted: boolean;
+  hunks: DiffLine[][];
 }
 
 interface DiffViewerProps {
-  onClose?: () => void
+  onClose?: () => void;
 }
 
-export function DiffViewer({ onClose }: DiffViewerProps = {}): React.JSX.Element {
-  const [files, setFiles] = useState<DiffFileBlock[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
-  const [stagedMode, setStagedMode] = useState(false)
-  const setCurrentView = useAppStore((state) => state.setCurrentView)
+export function DiffViewer({
+  onClose,
+}: DiffViewerProps = {}): React.JSX.Element {
+  const [files, setFiles] = useState<DiffFileBlock[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [stagedMode, setStagedMode] = useState(false);
+  const setCurrentView = useAppStore((state) => state.setCurrentView);
 
   const loadDiff = useCallback(async () => {
-    setLoading(true)
+    setLoading(true);
     try {
       const diff = stagedMode
         ? await window.piDesktop.files.getStagedDiff()
-        : await window.piDesktop.files.getDiff()
-      setFiles(parseDiff(diff))
-      setLoadError(null)
+        : await window.piDesktop.files.getDiff();
+      setFiles(parseDiff(diff));
+      setLoadError(null);
     } catch (err) {
-      setFiles([])
-      setLoadError(formatIpcError(err))
+      setFiles([]);
+      setLoadError(formatUiError(err));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [stagedMode])
+  }, [stagedMode]);
 
   useEffect(() => {
-    loadDiff()
-  }, [loadDiff])
+    loadDiff();
+  }, [loadDiff]);
 
   const toggleFile = (path: string) => {
     setExpandedFiles((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -78,40 +80,42 @@ export function DiffViewer({ onClose }: DiffViewerProps = {}): React.JSX.Element
         <div className="flex flex-wrap items-center gap-2">
           <div className="order-1 flex min-w-0 flex-1 items-center gap-2">
             <GitCompare size={16} className="shrink-0 text-muted" />
-            <h2 className="truncate text-sm font-medium text-primary">Diff Viewer</h2>
+            <h2 className="truncate text-sm font-medium text-primary">
+              差异查看器
+            </h2>
             <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-xs text-dim">
-              {files.length} file{files.length !== 1 ? 's' : ''}
+              {files.length} 个文件
             </span>
           </div>
           <div className="order-2 flex shrink-0 items-center gap-2">
             <button
               onClick={() => setStagedMode(!stagedMode)}
               className={clsx(
-                'rounded px-2 py-1 text-xs transition-colors',
+                "rounded px-2 py-1 text-xs transition-colors",
                 stagedMode
-                  ? 'bg-success-bg text-success'
-                  : 'bg-card text-muted hover:text-secondary'
+                  ? "bg-success-bg text-success"
+                  : "bg-card text-muted hover:text-secondary",
               )}
             >
-              {stagedMode ? 'Staged' : 'Working'}
+              {stagedMode ? "已暂存" : "工作区"}
             </button>
             <button
               onClick={loadDiff}
               className="rounded p-1.5 text-dim transition-colors hover:bg-surface-hover hover:text-secondary"
-              aria-label="Refresh diff"
+              aria-label="刷新差异"
             >
               <RefreshCw size={14} />
             </button>
             <button
               onClick={() => {
                 if (onClose) {
-                  onClose()
+                  onClose();
                 } else {
-                  setCurrentView('chat')
+                  setCurrentView("chat");
                 }
               }}
               className="rounded p-1.5 text-dim transition-colors hover:bg-surface-hover hover:text-secondary"
-              aria-label="Close diff viewer"
+              aria-label="关闭差异查看器"
             >
               <X size={14} />
             </button>
@@ -131,21 +135,23 @@ export function DiffViewer({ onClose }: DiffViewerProps = {}): React.JSX.Element
         ) : loadError !== null ? (
           <div className="flex flex-col items-center justify-center py-12 text-dim">
             <AlertTriangle size={32} className="mb-3 text-warning" />
-            <p className="text-sm text-secondary">Couldn't load the diff</p>
-            <p className="mt-1 max-w-md break-words px-4 text-center text-xs text-faint">{loadError}</p>
+            <p className="text-sm text-secondary">无法加载差异</p>
+            <p className="mt-1 max-w-md break-words px-4 text-center text-xs text-faint">
+              {loadError}
+            </p>
             <button
               onClick={loadDiff}
               className="mt-3 rounded bg-card px-3 py-1 text-xs text-secondary transition-colors hover:bg-surface-hover"
             >
-              Retry
+              重试
             </button>
           </div>
         ) : files.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-dim">
             <GitCompare size={32} className="mb-3 text-faint" />
-            <p className="text-sm">No changes</p>
+            <p className="text-sm">没有改动</p>
             <p className="mt-1 text-xs text-faint">
-              {stagedMode ? 'No staged changes' : 'Working tree is clean'}
+              {stagedMode ? "没有已暂存的改动" : "工作区是干净的"}
             </p>
           </div>
         ) : (
@@ -162,7 +168,7 @@ export function DiffViewer({ onClose }: DiffViewerProps = {}): React.JSX.Element
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function DiffFileEntry({
@@ -170,16 +176,19 @@ function DiffFileEntry({
   expanded,
   onToggle,
 }: {
-  file: DiffFileBlock
-  expanded: boolean
-  onToggle: () => void
+  file: DiffFileBlock;
+  expanded: boolean;
+  onToggle: () => void;
 }): React.JSX.Element {
-  const additions = file.hunks.flat().filter((l) => l.type === 'add').length
-  const deletions = file.hunks.flat().filter((l) => l.type === 'remove').length
+  const additions = file.hunks.flat().filter((l) => l.type === "add").length;
+  const deletions = file.hunks.flat().filter((l) => l.type === "remove").length;
   // Diff body scales with the Code Editor font-size setting (like the code viewer).
   const codeFontSize = useAppStore(
-    (state) => state.settingsDraft.codeEditorFontSize ?? state.settings?.codeEditorFontSize ?? DEFAULT_SETTINGS.codeEditorFontSize
-  )
+    (state) =>
+      state.settingsDraft.codeEditorFontSize ??
+      state.settings?.codeEditorFontSize ??
+      DEFAULT_SETTINGS.codeEditorFontSize,
+  );
 
   return (
     <div className="rounded-lg border border-border overflow-hidden">
@@ -193,24 +202,27 @@ function DiffFileEntry({
         <span className="text-xs text-primary truncate">{file.newPath}</span>
         <div className="ml-auto flex items-center gap-2 text-xs">
           {file.isNew && (
-            <span className="rounded bg-success-bg px-1.5 py-0.5 text-success">NEW</span>
+            <span className="rounded bg-success-bg px-1.5 py-0.5 text-success">
+              新增
+            </span>
           )}
           {file.isDeleted && (
-            <span className="rounded bg-error-bg px-1.5 py-0.5 text-error">DELETED</span>
+            <span className="rounded bg-error-bg px-1.5 py-0.5 text-error">
+              已删除
+            </span>
           )}
-          {additions > 0 && (
-            <span className="text-success">+{additions}</span>
-          )}
-          {deletions > 0 && (
-            <span className="text-error">-{deletions}</span>
-          )}
+          {additions > 0 && <span className="text-success">+{additions}</span>}
+          {deletions > 0 && <span className="text-error">-{deletions}</span>}
         </div>
       </button>
 
       {/* Diff content */}
       {expanded && (
         <div className="border-t border-border overflow-x-auto">
-          <table className="font-jetbrains w-full" style={{ fontSize: `${codeFontSize}px` }}>
+          <table
+            className="font-jetbrains w-full"
+            style={{ fontSize: `${codeFontSize}px` }}
+          >
             <tbody>
               {file.hunks.map((hunk, hunkIdx) => (
                 <DiffHunk key={hunkIdx} lines={hunk} />
@@ -220,7 +232,7 @@ function DiffFileEntry({
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function DiffHunk({ lines }: { lines: DiffLine[] }): React.JSX.Element {
@@ -228,24 +240,24 @@ function DiffHunk({ lines }: { lines: DiffLine[] }): React.JSX.Element {
     <>
       {lines.map((line, i) => (
         <tr
-          key={`${line.type}-${line.oldLine ?? ''}-${line.newLine ?? ''}-${i}`}
+          key={`${line.type}-${line.oldLine ?? ""}-${line.newLine ?? ""}-${i}`}
           className={clsx(
-            line.type === 'add' && 'bg-success-bg',
-            line.type === 'remove' && 'bg-error-bg',
-            line.type === 'hunk' && 'bg-accent-bg',
+            line.type === "add" && "bg-success-bg",
+            line.type === "remove" && "bg-error-bg",
+            line.type === "hunk" && "bg-accent-bg",
           )}
         >
           <td className="w-10 px-2 py-0.5 text-right text-faint select-none border-r border-border">
-            {line.oldLine ?? ''}
+            {line.oldLine ?? ""}
           </td>
           <td className="w-10 px-2 py-0.5 text-right text-faint select-none border-r border-border">
-            {line.newLine ?? ''}
+            {line.newLine ?? ""}
           </td>
           <td className="w-6 px-1 py-0.5 text-center select-none">
-            {line.type === 'add' && <span className="text-success">+</span>}
-            {line.type === 'remove' && <span className="text-error">-</span>}
-            {line.type === 'context' && <span className="text-ghost"> </span>}
-            {line.type === 'hunk' && <span className="text-accent-fg">@</span>}
+            {line.type === "add" && <span className="text-success">+</span>}
+            {line.type === "remove" && <span className="text-error">-</span>}
+            {line.type === "context" && <span className="text-ghost"> </span>}
+            {line.type === "hunk" && <span className="text-accent-fg">@</span>}
           </td>
           <td className="px-2 py-0.5 whitespace-pre text-secondary">
             {line.content}
@@ -253,63 +265,68 @@ function DiffHunk({ lines }: { lines: DiffLine[] }): React.JSX.Element {
         </tr>
       ))}
     </>
-  )
+  );
 }
 
 // ─── Diff Parser ─────────────────────────────────────────────────────────────
 
 function parseDiff(diffText: string): DiffFileBlock[] {
-  if (!diffText.trim()) return []
+  if (!diffText.trim()) return [];
 
-  const files: DiffFileBlock[] = []
-  const fileBlocks = diffText.split(/^diff --git /m).filter(Boolean)
+  const files: DiffFileBlock[] = [];
+  const fileBlocks = diffText.split(/^diff --git /m).filter(Boolean);
 
   for (const block of fileBlocks) {
-    const lines = block.split('\n')
+    const lines = block.split("\n");
 
     // Parse file paths from "a/path b/path"
-    const pathLine = lines[0] ?? ''
-    const pathMatch = pathLine.match(/^a\/(.+?) b\/(.+)$/)
-    const oldPath = pathMatch?.[1] ?? 'unknown'
-    const newPath = pathMatch?.[2] ?? oldPath
+    const pathLine = lines[0] ?? "";
+    const pathMatch = pathLine.match(/^a\/(.+?) b\/(.+)$/);
+    const oldPath = pathMatch?.[1] ?? "unknown";
+    const newPath = pathMatch?.[2] ?? oldPath;
 
-    const isNew = lines.some((l) => l.startsWith('new file mode'))
-    const isDeleted = lines.some((l) => l.startsWith('deleted file mode'))
+    const isNew = lines.some((l) => l.startsWith("new file mode"));
+    const isDeleted = lines.some((l) => l.startsWith("deleted file mode"));
 
     // Parse hunks
-    const hunks: DiffLine[][] = []
-    let currentHunk: DiffLine[] = []
-    let oldLine = 0
-    let newLine = 0
+    const hunks: DiffLine[][] = [];
+    let currentHunk: DiffLine[] = [];
+    let oldLine = 0;
+    let newLine = 0;
 
     for (const line of lines) {
-      if (line.startsWith('@@')) {
-        if (currentHunk.length > 0) hunks.push(currentHunk)
-        currentHunk = []
+      if (line.startsWith("@@")) {
+        if (currentHunk.length > 0) hunks.push(currentHunk);
+        currentHunk = [];
 
-        const hunkMatch = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+        const hunkMatch = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
         if (hunkMatch) {
-          oldLine = parseInt(hunkMatch[1])
-          newLine = parseInt(hunkMatch[2])
+          oldLine = parseInt(hunkMatch[1]);
+          newLine = parseInt(hunkMatch[2]);
         }
-        currentHunk.push({ type: 'hunk', content: line })
-      } else if (line.startsWith('+') && !line.startsWith('+++')) {
-        currentHunk.push({ type: 'add', content: line.slice(1), newLine })
-        newLine++
-      } else if (line.startsWith('-') && !line.startsWith('---')) {
-        currentHunk.push({ type: 'remove', content: line.slice(1), oldLine })
-        oldLine++
-      } else if (line.startsWith(' ')) {
-        currentHunk.push({ type: 'context', content: line.slice(1), oldLine, newLine })
-        oldLine++
-        newLine++
+        currentHunk.push({ type: "hunk", content: line });
+      } else if (line.startsWith("+") && !line.startsWith("+++")) {
+        currentHunk.push({ type: "add", content: line.slice(1), newLine });
+        newLine++;
+      } else if (line.startsWith("-") && !line.startsWith("---")) {
+        currentHunk.push({ type: "remove", content: line.slice(1), oldLine });
+        oldLine++;
+      } else if (line.startsWith(" ")) {
+        currentHunk.push({
+          type: "context",
+          content: line.slice(1),
+          oldLine,
+          newLine,
+        });
+        oldLine++;
+        newLine++;
       }
     }
 
-    if (currentHunk.length > 0) hunks.push(currentHunk)
+    if (currentHunk.length > 0) hunks.push(currentHunk);
 
-    files.push({ oldPath, newPath, isNew, isDeleted, hunks })
+    files.push({ oldPath, newPath, isNew, isDeleted, hunks });
   }
 
-  return files
+  return files;
 }

@@ -1,45 +1,52 @@
-import { useEffect, useRef } from 'react'
-import { MarkdownRenderer } from './markdown-renderer'
-import { toolLabel } from '../message-grouping'
-import { toolCallIconFor } from './tool-call-icon'
-import { useAppStore } from '../store'
-import { DEFAULT_SETTINGS } from '../../../shared/default-settings'
-import { Brain, Bot, Loader2 } from 'lucide-react'
-import { clsx } from 'clsx'
+import { useEffect, useRef } from "react";
+import { MarkdownRenderer } from "./markdown-renderer";
+import { localizedToolLabel } from "../message-grouping";
+import { toolCallIconFor } from "./tool-call-icon";
+import { useAppStore } from "../store";
+import { DEFAULT_SETTINGS } from "../../../shared/default-settings";
+import { Brain, Bot, Loader2 } from "lucide-react";
+import { clsx } from "clsx";
 
 interface StreamingBubbleProps {
-  content: string
-  thinking: string
+  content: string;
+  thinking: string;
   toolCalls: Map<
     string,
     {
-      name: string
-      args: string
-      result?: string
-      isExecuting: boolean
-      isError?: boolean
-      startedAt?: number
-      durationMs?: number
+      name: string;
+      args: string;
+      result?: string;
+      isExecuting: boolean;
+      isError?: boolean;
+      startedAt?: number;
+      durationMs?: number;
     }
-  >
+  >;
 }
 
-export function StreamingBubble({ content, thinking, toolCalls }: StreamingBubbleProps): React.JSX.Element {
+export function StreamingBubble({
+  content,
+  thinking,
+  toolCalls,
+}: StreamingBubbleProps): React.JSX.Element {
   const thinkingEnabled = useAppStore(
-    (state) => state.settingsDraft.showThinking ?? state.settings?.showThinking ?? DEFAULT_SETTINGS.showThinking
-  )
-  const thinkingScrollRef = useRef<HTMLDivElement>(null)
+    (state) =>
+      state.settingsDraft.showThinking ??
+      state.settings?.showThinking ??
+      DEFAULT_SETTINGS.showThinking,
+  );
+  const thinkingScrollRef = useRef<HTMLDivElement>(null);
 
   // Follow the thinking tail only when the user is already at/near the bottom,
   // so scrolling up mid-stream to re-read is not yanked back down.
   useEffect(() => {
-    const el = thinkingScrollRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop
+    const el = thinkingScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
     if (distanceFromBottom <= 48) {
-      el.scrollTop = el.scrollHeight
+      el.scrollTop = el.scrollHeight;
     }
-  }, [thinking])
+  }, [thinking]);
 
   return (
     <div className="mb-4 animate-fade-in">
@@ -53,8 +60,11 @@ export function StreamingBubble({ content, thinking, toolCalls }: StreamingBubbl
             <div className="thinking-hover mb-2 min-w-0">
               <div className="flex h-7 items-center gap-1.5 text-sm text-dim">
                 <Brain size={12} className="shrink-0" />
-                <Loader2 size={12} className="shrink-0 animate-spin text-special" />
-                <span>Thinking</span>
+                <Loader2
+                  size={12}
+                  className="shrink-0 animate-spin text-special"
+                />
+                <span>思考中</span>
               </div>
               <div
                 ref={thinkingScrollRef}
@@ -70,17 +80,17 @@ export function StreamingBubble({ content, thinking, toolCalls }: StreamingBubbl
           {toolCalls.size > 0 && (
             <div className="mb-2 space-y-1">
               {Array.from(toolCalls.entries()).map(([id, tc]) => {
-                const Icon = toolCallIconFor(tc.name)
+                const Icon = toolCallIconFor(tc.name);
                 return (
                   <div
                     key={id}
                     className={clsx(
-                      'flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm',
+                      "flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm",
                       tc.isExecuting
-                        ? 'border-warning-bg bg-warning-bg text-warning'
+                        ? "border-warning-bg bg-warning-bg text-warning"
                         : tc.isError
-                          ? 'border-error-bg bg-surface/50 text-muted'
-                          : 'border-border bg-surface/50 text-muted'
+                          ? "border-error-bg bg-surface/50 text-muted"
+                          : "border-border bg-surface/50 text-muted",
                     )}
                   >
                     {tc.isExecuting ? (
@@ -88,19 +98,21 @@ export function StreamingBubble({ content, thinking, toolCalls }: StreamingBubbl
                     ) : (
                       <Icon size={12} className="shrink-0" />
                     )}
-                    <span className="min-w-0 truncate font-jetbrains">{toolLabel(tc.name)}</span>
+                    <span className="min-w-0 truncate font-jetbrains">
+                      {localizedToolLabel(tc.name)}
+                    </span>
                     <span
                       className={clsx(
-                        'ml-auto shrink-0 text-xs capitalize',
-                        tc.isExecuting && 'text-warning animate-pulse',
-                        !tc.isExecuting && tc.isError && 'text-error',
-                        !tc.isExecuting && !tc.isError && 'text-success'
+                        "ml-auto shrink-0 text-xs capitalize",
+                        tc.isExecuting && "text-warning animate-pulse",
+                        !tc.isExecuting && tc.isError && "text-error",
+                        !tc.isExecuting && !tc.isError && "text-success",
                       )}
                     >
-                      {tc.isExecuting ? 'running' : tc.isError ? 'error' : 'done'}
+                      {tc.isExecuting ? "运行中" : tc.isError ? "错误" : "完成"}
                     </span>
                   </div>
-                )
+                );
               })}
             </div>
           )}
@@ -116,11 +128,11 @@ export function StreamingBubble({ content, thinking, toolCalls }: StreamingBubbl
           {!content && !thinking && toolCalls.size === 0 && (
             <div className="flex h-7 items-center gap-2 text-sm text-dim">
               <Loader2 size={12} className="animate-spin" />
-              Waiting for response...
+              等待响应…
             </div>
           )}
         </div>
       </div>
     </div>
-  )
+  );
 }

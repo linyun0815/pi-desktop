@@ -182,7 +182,7 @@ export function decideToolCall(
   const result = evaluateRules(rules, toolName, input, platform)
   if (result.decision === 'deny') {
     const suffix = result.rule.match === undefined ? '' : ` ${result.rule.match}`
-    return { action: 'block', reason: `Blocked by permission rule: deny ${result.rule.tool}${suffix}` }
+    return { action: 'block', reason: `已被权限规则阻止：deny ${result.rule.tool}${suffix}` }
   }
   if (result.decision === 'allow') return { action: 'allow' }
   if (mode === MODE_ASK_EDITS && ASK_EDITS_GATED_TOOLS.has(toolName)) return { action: 'prompt' }

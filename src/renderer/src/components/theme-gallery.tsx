@@ -1,30 +1,37 @@
-import { useEffect, useState } from 'react'
-import type { CSSProperties } from 'react'
-import clsx from 'clsx'
-import { X, Check, User, ChevronLeft } from 'lucide-react'
-import type { GalleryTheme, UserThemeRecord } from '../../../shared/ipc-contracts'
-import { resolveThemeVars } from '../../../shared/theme/resolve'
+import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import clsx from "clsx";
+import { X, Check, User, ChevronLeft } from "lucide-react";
+import type {
+  GalleryTheme,
+  UserThemeRecord,
+} from "../../../shared/ipc-contracts";
+import { resolveThemeVars } from "../../../shared/theme/resolve";
+import { localizedThemeKind } from "../utils/ui-text";
+import { formatUiError } from "../utils/ipc-error";
 
 // How many cards render before "Show more" reveals the next batch. Keeps a
 // large index responsive — each card mounts a live-preview subtree.
-const GALLERY_PAGE_SIZE = 12
+const GALLERY_PAGE_SIZE = 12;
 
 interface ThemeGalleryProps {
-  onClose: () => void
+  onClose: () => void;
   // Called after a gallery theme is installed so the panel can register,
   // apply, and select it (installs go through the same validated,
   // SSRF-guarded path as manual URL installs).
-  onInstalled: (theme: UserThemeRecord) => void
+  onInstalled: (theme: UserThemeRecord) => void;
 }
 
-type LoadState = 'loading' | 'ready' | 'error'
+type LoadState = "loading" | "ready" | "error";
 
 // Scopes a theme's full resolved variable set to one preview card. The card's
 // children read var(--color-*) exactly like the real app does, so the preview
 // uses the same derivation pipeline (color-mix and all) as an actual install
 // — no screenshots or approximations involved.
-function previewStyle(theme: NonNullable<GalleryTheme['theme']>): CSSProperties {
-  return resolveThemeVars(theme) as CSSProperties
+function previewStyle(
+  theme: NonNullable<GalleryTheme["theme"]>,
+): CSSProperties {
+  return resolveThemeVars(theme) as CSSProperties;
 }
 
 // A miniature of the app's layout: sidebar, chat surface with a bubble, a
@@ -35,49 +42,88 @@ function ThemePreview({
   theme,
   detail = false,
 }: {
-  theme: NonNullable<GalleryTheme['theme']>
-  detail?: boolean
+  theme: NonNullable<GalleryTheme["theme"]>;
+  detail?: boolean;
 }): React.JSX.Element {
   return (
     <div
-      style={{ ...previewStyle(theme), borderColor: 'var(--color-border)' }}
+      style={{ ...previewStyle(theme), borderColor: "var(--color-border)" }}
       className={clsx(
-        'pointer-events-none flex select-none overflow-hidden rounded-md border',
-        detail ? 'h-52' : 'h-28'
+        "pointer-events-none flex select-none overflow-hidden rounded-md border",
+        detail ? "h-52" : "h-28",
       )}
       aria-hidden
     >
-      <div style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }} className="flex w-1/4 flex-col gap-1.5 border-r p-2">
-        <div style={{ backgroundColor: 'var(--color-accent)' }} className="h-2 w-3/4 rounded-sm" />
-        <div style={{ backgroundColor: 'var(--color-muted)' }} className="h-1.5 w-full rounded-sm opacity-60" />
-        <div style={{ backgroundColor: 'var(--color-muted)' }} className="h-1.5 w-5/6 rounded-sm opacity-40" />
-        <div style={{ backgroundColor: 'var(--color-muted)' }} className="h-1.5 w-4/6 rounded-sm opacity-40" />
+      <div
+        style={{
+          backgroundColor: "var(--color-surface)",
+          borderColor: "var(--color-border)",
+        }}
+        className="flex w-1/4 flex-col gap-1.5 border-r p-2"
+      >
+        <div
+          style={{ backgroundColor: "var(--color-accent)" }}
+          className="h-2 w-3/4 rounded-sm"
+        />
+        <div
+          style={{ backgroundColor: "var(--color-muted)" }}
+          className="h-1.5 w-full rounded-sm opacity-60"
+        />
+        <div
+          style={{ backgroundColor: "var(--color-muted)" }}
+          className="h-1.5 w-5/6 rounded-sm opacity-40"
+        />
+        <div
+          style={{ backgroundColor: "var(--color-muted)" }}
+          className="h-1.5 w-4/6 rounded-sm opacity-40"
+        />
       </div>
-      <div style={{ backgroundColor: 'var(--color-app)' }} className="flex flex-1 flex-col justify-between p-2">
+      <div
+        style={{ backgroundColor: "var(--color-app)" }}
+        className="flex flex-1 flex-col justify-between p-2"
+      >
         <div className="flex flex-col gap-1.5">
-          <div style={{ backgroundColor: 'var(--color-card)' }} className="h-4 w-3/4 self-start rounded-sm" />
-          <div style={{ backgroundColor: 'var(--color-accent)' }} className="h-4 w-2/3 self-end rounded-sm opacity-90" />
+          <div
+            style={{ backgroundColor: "var(--color-card)" }}
+            className="h-4 w-3/4 self-start rounded-sm"
+          />
+          <div
+            style={{ backgroundColor: "var(--color-accent)" }}
+            className="h-4 w-2/3 self-end rounded-sm opacity-90"
+          />
         </div>
         {/* Code sample rendered from the theme's own --cm-* syntax palette. */}
         <div
-          style={{ backgroundColor: 'var(--color-md-pre-bg)' }}
+          style={{ backgroundColor: "var(--color-md-pre-bg)" }}
           className={clsx(
-            'flex items-center gap-1.5 rounded-sm px-1.5 py-1 font-mono leading-none',
-            detail ? 'text-[10px]' : 'text-[7px]'
+            "flex items-center gap-1.5 rounded-sm px-1.5 py-1 font-mono leading-none",
+            detail ? "text-[10px]" : "text-[7px]",
           )}
         >
-          <span style={{ color: 'var(--cm-keyword)' }}>const</span>
-          <span style={{ color: 'var(--cm-variable)' }}>theme</span>
-          <span style={{ color: 'var(--cm-operator)' }}>=</span>
-          <span style={{ color: 'var(--cm-string)' }}>&quot;pi&quot;</span>
-          <span style={{ color: 'var(--cm-comment)' }}>// syntax</span>
+          <span style={{ color: "var(--cm-keyword)" }}>const</span>
+          <span style={{ color: "var(--cm-variable)" }}>theme</span>
+          <span style={{ color: "var(--cm-operator)" }}>=</span>
+          <span style={{ color: "var(--cm-string)" }}>&quot;pi&quot;</span>
+          <span style={{ color: "var(--cm-comment)" }}>// syntax</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span style={{ backgroundColor: 'var(--color-success)' }} className="h-2 w-2 rounded-full" />
-          <span style={{ backgroundColor: 'var(--color-warning)' }} className="h-2 w-2 rounded-full" />
-          <span style={{ backgroundColor: 'var(--color-error)' }} className="h-2 w-2 rounded-full" />
           <span
-            style={{ backgroundColor: 'var(--color-surface)', color: 'var(--color-primary)' }}
+            style={{ backgroundColor: "var(--color-success)" }}
+            className="h-2 w-2 rounded-full"
+          />
+          <span
+            style={{ backgroundColor: "var(--color-warning)" }}
+            className="h-2 w-2 rounded-full"
+          />
+          <span
+            style={{ backgroundColor: "var(--color-error)" }}
+            className="h-2 w-2 rounded-full"
+          />
+          <span
+            style={{
+              backgroundColor: "var(--color-surface)",
+              color: "var(--color-primary)",
+            }}
             className="ml-auto rounded-sm px-1.5 py-0.5 text-[8px] leading-tight"
           >
             Aa
@@ -85,71 +131,76 @@ function ThemePreview({
         </div>
       </div>
     </div>
-  )
+  );
 }
 
-export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React.JSX.Element {
-  const [loadState, setLoadState] = useState<LoadState>('loading')
-  const [themes, setThemes] = useState<GalleryTheme[]>([])
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [installingUrl, setInstallingUrl] = useState<string | null>(null)
-  const [installedUrls, setInstalledUrls] = useState<Set<string>>(new Set())
-  const [installError, setInstallError] = useState<string | null>(null)
-  const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE)
-  const [detail, setDetail] = useState<GalleryTheme | null>(null)
+export function ThemeGallery({
+  onClose,
+  onInstalled,
+}: ThemeGalleryProps): React.JSX.Element {
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [themes, setThemes] = useState<GalleryTheme[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [installingUrl, setInstallingUrl] = useState<string | null>(null);
+  const [installedUrls, setInstalledUrls] = useState<Set<string>>(new Set());
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE);
+  const [detail, setDetail] = useState<GalleryTheme | null>(null);
 
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     void window.piDesktop.themes.gallery().then((result) => {
-      if (cancelled) return
+      if (cancelled) return;
       if (result.ok) {
-        setThemes(result.themes)
-        setLoadState('ready')
+        setThemes(result.themes);
+        setLoadState("ready");
       } else {
-        setLoadError(result.error)
-        setLoadState('error')
+        setLoadError(formatUiError(result.error));
+        setLoadState("error");
       }
-    })
+    });
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         // Escape backs out of the detail view first, then closes the modal.
-        if (detail) setDetail(null)
-        else onClose()
+        if (detail) setDetail(null);
+        else onClose();
       }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, detail])
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, detail]);
 
   const install = async (theme: GalleryTheme): Promise<void> => {
-    setInstallingUrl(theme.url)
-    setInstallError(null)
-    const result = await window.piDesktop.themes.installFromUrl(theme.url)
-    setInstallingUrl(null)
+    setInstallingUrl(theme.url);
+    setInstallError(null);
+    const result = await window.piDesktop.themes.installFromUrl(theme.url);
+    setInstallingUrl(null);
     if (result.ok) {
-      setInstalledUrls((prev) => new Set(prev).add(theme.url))
-      onInstalled(result.theme)
-    } else if (!('canceled' in result)) {
-      setInstallError(result.error)
+      setInstalledUrls((prev) => new Set(prev).add(theme.url));
+      onInstalled(result.theme);
+    } else if (!("canceled" in result)) {
+      setInstallError(formatUiError(result.error));
     }
-  }
+  };
 
-  const installButtonLabel = (theme: GalleryTheme): React.JSX.Element | string => {
+  const installButtonLabel = (
+    theme: GalleryTheme,
+  ): React.JSX.Element | string => {
     if (installedUrls.has(theme.url)) {
       return (
         <span className="flex items-center gap-1">
-          <Check size={14} /> Installed
+          <Check size={14} /> 已安装
         </span>
-      )
+      );
     }
-    return installingUrl === theme.url ? 'Installing…' : 'Install'
-  }
+    return installingUrl === theme.url ? "安装中…" : "安装";
+  };
 
   return (
     <div
@@ -165,7 +216,7 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
             {detail && (
               <button
                 onClick={() => setDetail(null)}
-                aria-label="Back to all themes"
+                aria-label="返回全部主题"
                 className="rounded p-1 text-dim hover:bg-surface-hover hover:text-primary transition-colors"
               >
                 <ChevronLeft size={16} />
@@ -173,18 +224,18 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
             )}
             <div>
               <h3 className="text-base font-semibold text-primary">
-                {detail ? detail.name : 'Community themes'}
+                {detail ? detail.name : "社区主题"}
               </h3>
               <p className="text-xs text-dim">
                 {detail
-                  ? 'Live preview from the theme’s real colors'
-                  : 'From the pi-desktop-themes gallery — click a theme for details'}
+                  ? "使用主题真实颜色的实时预览"
+                  : "来自 pi-desktop-themes 主题库，点击主题查看详情"}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            aria-label="Close"
+            aria-label="关闭"
             className="rounded p-1 text-dim hover:bg-surface-hover hover:text-primary transition-colors"
           >
             <X size={16} />
@@ -195,19 +246,25 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
             <ThemeDetail
               theme={detail}
               installLabel={installButtonLabel(detail)}
-              installDisabled={installingUrl === detail.url || installedUrls.has(detail.url)}
+              installDisabled={
+                installingUrl === detail.url || installedUrls.has(detail.url)
+              }
               onInstall={() => void install(detail)}
             />
           ) : (
             <>
-              {loadState === 'loading' && <p className="text-sm text-muted">Loading themes…</p>}
-              {loadState === 'error' && (
-                <p className="text-sm text-error">Could not load the gallery: {loadError}</p>
+              {loadState === "loading" && (
+                <p className="text-sm text-muted">正在加载主题…</p>
               )}
-              {loadState === 'ready' && themes.length === 0 && (
-                <p className="text-sm text-muted">No themes are available yet.</p>
+              {loadState === "error" && (
+                <p className="text-sm text-error">
+                  无法加载主题库：{loadError}
+                </p>
               )}
-              {loadState === 'ready' && themes.length > 0 && (
+              {loadState === "ready" && themes.length === 0 && (
+                <p className="text-sm text-muted">暂无可用主题。</p>
+              )}
+              {loadState === "ready" && themes.length > 0 && (
                 <>
                   <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {themes.slice(0, visibleCount).map((theme) => (
@@ -221,16 +278,18 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
                         <button
                           type="button"
                           onClick={() => setDetail(theme)}
-                          aria-label={`View ${theme.name} details`}
+                          aria-label={`查看 ${theme.name} 的详情`}
                           className="absolute inset-0 z-10 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
                         />
                         {theme.theme && <ThemePreview theme={theme.theme} />}
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="truncate text-sm font-medium text-primary">{theme.name}</span>
+                              <span className="truncate text-sm font-medium text-primary">
+                                {theme.name}
+                              </span>
                               <span className="shrink-0 rounded-sm bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                                {theme.kind}
+                                {localizedThemeKind(theme.kind)}
                               </span>
                             </div>
                             {theme.author && (
@@ -243,14 +302,19 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
                           <button
                             type="button"
                             onClick={() => void install(theme)}
-                            disabled={installingUrl === theme.url || installedUrls.has(theme.url)}
+                            disabled={
+                              installingUrl === theme.url ||
+                              installedUrls.has(theme.url)
+                            }
                             className="relative z-20 shrink-0 rounded-md border border-border-strong px-3 py-1 text-sm text-muted hover:bg-surface-hover transition-colors disabled:pointer-events-none disabled:opacity-60"
                           >
                             {installButtonLabel(theme)}
                           </button>
                         </div>
                         {theme.description && (
-                          <p className="line-clamp-2 text-xs leading-relaxed text-muted">{theme.description}</p>
+                          <p className="line-clamp-2 text-xs leading-relaxed text-muted">
+                            {theme.description}
+                          </p>
                         )}
                       </li>
                     ))}
@@ -258,22 +322,26 @@ export function ThemeGallery({ onClose, onInstalled }: ThemeGalleryProps): React
                   {visibleCount < themes.length && (
                     <div className="mt-4 flex justify-center">
                       <button
-                        onClick={() => setVisibleCount((n) => n + GALLERY_PAGE_SIZE)}
+                        onClick={() =>
+                          setVisibleCount((n) => n + GALLERY_PAGE_SIZE)
+                        }
                         className="rounded-md border border-border-strong px-4 py-1.5 text-sm text-muted hover:bg-surface-hover transition-colors"
                       >
-                        Show more ({themes.length - visibleCount})
+                        显示更多（还有 {themes.length - visibleCount} 个）
                       </button>
                     </div>
                   )}
                 </>
               )}
-              {installError && <p className="mt-3 text-xs text-error">{installError}</p>}
+              {installError && (
+                <p className="mt-3 text-xs text-error">{installError}</p>
+              )}
             </>
           )}
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 // Expanded view for one theme: a large live preview, full metadata, the
@@ -284,31 +352,35 @@ function ThemeDetail({
   installDisabled,
   onInstall,
 }: {
-  theme: GalleryTheme
-  installLabel: React.JSX.Element | string
-  installDisabled: boolean
-  onInstall: () => void
+  theme: GalleryTheme;
+  installLabel: React.JSX.Element | string;
+  installDisabled: boolean;
+  onInstall: () => void;
 }): React.JSX.Element {
-  const [shot, setShot] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [shotUri, setShotUri] = useState<string | null>(null)
+  const [shot, setShot] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  const [shotUri, setShotUri] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!theme.screenshotUrl) return
-    let cancelled = false
-    setShot('loading')
-    void window.piDesktop.themes.galleryImage(theme.screenshotUrl).then((result) => {
-      if (cancelled) return
-      if (result.ok) {
-        setShotUri(result.dataUri)
-        setShot('ready')
-      } else {
-        setShot('error')
-      }
-    })
+    if (!theme.screenshotUrl) return;
+    let cancelled = false;
+    setShot("loading");
+    void window.piDesktop.themes
+      .galleryImage(theme.screenshotUrl)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) {
+          setShotUri(result.dataUri);
+          setShot("ready");
+        } else {
+          setShot("error");
+        }
+      });
     return () => {
-      cancelled = true
-    }
-  }, [theme.screenshotUrl])
+      cancelled = true;
+    };
+  }, [theme.screenshotUrl]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -316,9 +388,11 @@ function ThemeDetail({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-primary">{theme.name}</span>
+            <span className="text-sm font-medium text-primary">
+              {theme.name}
+            </span>
             <span className="rounded-sm bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-              {theme.kind}
+              {localizedThemeKind(theme.kind)}
             </span>
           </div>
           {theme.author && (
@@ -337,22 +411,28 @@ function ThemeDetail({
         </button>
       </div>
       {theme.description && (
-        <p className="text-sm leading-relaxed text-muted">{theme.description}</p>
+        <p className="text-sm leading-relaxed text-muted">
+          {theme.description}
+        </p>
       )}
       {theme.screenshotUrl && (
         <div>
-          <div className="mb-1 text-xs text-dim">Author screenshot</div>
-          {shot === 'loading' && <p className="text-xs text-muted">Loading screenshot…</p>}
-          {shot === 'error' && <p className="text-xs text-muted">Screenshot could not be loaded.</p>}
-          {shot === 'ready' && shotUri && (
+          <div className="mb-1 text-xs text-dim">作者截图</div>
+          {shot === "loading" && (
+            <p className="text-xs text-muted">正在加载截图…</p>
+          )}
+          {shot === "error" && (
+            <p className="text-xs text-muted">无法加载截图。</p>
+          )}
+          {shot === "ready" && shotUri && (
             <img
               src={shotUri}
-              alt={`Screenshot of ${theme.name}`}
+              alt={theme.name + " 的截图"}
               className="max-h-80 w-full rounded-md border border-border object-contain"
             />
           )}
         </div>
       )}
     </div>
-  )
+  );
 }
