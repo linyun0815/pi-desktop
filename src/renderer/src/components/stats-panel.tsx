@@ -11,6 +11,15 @@ import {
   intensityLevel,
   type IntensityLevel,
 } from "../utils/heatmap-grid";
+import {
+  dayTokenBreakdown,
+  formatCompact,
+  formatCost,
+  modelDisplayName,
+  num,
+  providerLabel,
+  usageTotal,
+} from "../utils/stats-format";
 
 type Tab = "overview" | "models";
 
@@ -53,18 +62,6 @@ const MODEL_DOT_COLORS = [
   "bg-neutral-500" /* theme-exempt: categorical palette */,
 ];
 
-/** Display label for a model: its models.json name, or the raw id as fallback. */
-function modelLabel(usage: ActivityModelUsage): string {
-  return usage.name ?? usage.model;
-}
-
-/** Compact token/count formatting: 6600000 → "6.6M", 847200 → "847.2k". */
-function formatCompact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
 /** Format a local hour as a compact 24-hour label. */
 function formatHour(h: number): string {
   return `${String(h).padStart(2, "0")}:00`;
@@ -80,13 +77,15 @@ function formatShortDate(dateKey: string): string {
 interface TokenBucket {
   label: string;
   total: number;
-  byModel: Record<string, number>; // model id -> tokens in this bucket
+  cost: number;
+  parts: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  byModel: Record<string, number>; // model key -> tokens in this bucket
 }
 
 /** Bucket a day slice into ≤ MAX_BARS bars, trimming leading token-free days. */
 function bucketTokens(days: ActivityStatsDay[]): TokenBucket[] {
   let start = 0;
-  while (start < days.length && days[start].tokens === 0) start += 1;
+  while (start < days.length && num(days[start].tokens) === 0) start += 1;
   const span = days.slice(start);
   if (span.length === 0) return [];
   const size = Math.max(1, Math.ceil(span.length / MAX_BARS));
@@ -94,13 +93,21 @@ function bucketTokens(days: ActivityStatsDay[]): TokenBucket[] {
   for (let i = 0; i < span.length; i += size) {
     const chunk = span.slice(i, i + size);
     const byModel: Record<string, number> = {};
+    const parts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     let total = 0;
+    let cost = 0;
     for (const d of chunk) {
-      total += d.tokens;
-      for (const [model, t] of Object.entries(d.tokensByModel))
-        byModel[model] = (byModel[model] ?? 0) + t;
+      const day = dayTokenBreakdown(d);
+      total += day.total;
+      cost += day.cost;
+      parts.input += day.input;
+      parts.output += day.output;
+      parts.cacheRead += day.cacheRead;
+      parts.cacheWrite += day.cacheWrite;
+      for (const [modelKey, t] of Object.entries(d.tokensByModel))
+        byModel[modelKey] = (byModel[modelKey] ?? 0) + num(t);
     }
-    buckets.push({ label: formatShortDate(chunk[0].date), total, byModel });
+    buckets.push({ label: formatShortDate(chunk[0].date), total, cost, parts, byModel });
   }
   return buckets;
 }
@@ -164,7 +171,7 @@ function TokenChart({
   modelColor,
 }: {
   days: ActivityStatsDay[];
-  orderedModels: string[]; // largest-first; stacking order (top → bottom)
+  orderedModels: string[]; // model keys, largest-first; stacking order (top → bottom)
   modelColor: Map<string, string>;
 }): React.JSX.Element {
   const buckets = useMemo(() => bucketTokens(days), [days]);
@@ -209,7 +216,7 @@ function TokenChart({
             {buckets.map((b, i) => (
               <div
                 key={i}
-                title={`${b.label} — ${formatCompact(b.total)} 个 Token`}
+                title={`${b.label} — ${formatCompact(b.total)} 个 Token\n输入 ${formatCompact(b.parts.input)} · 输出 ${formatCompact(b.parts.output)} · 缓存读 ${formatCompact(b.parts.cacheRead)} · 缓存写 ${formatCompact(b.parts.cacheWrite)}\n费用 ${formatCost(b.cost)}`}
                 className="flex min-w-[2px] flex-1 flex-col overflow-hidden rounded-sm"
                 style={{
                   height:
@@ -218,15 +225,15 @@ function TokenChart({
                       : "0%",
                 }}
               >
-                {orderedModels.map((model) => {
-                  const t = b.byModel[model] ?? 0;
+                {orderedModels.map((modelKey) => {
+                  const t = b.byModel[modelKey] ?? 0;
                   if (t <= 0 || b.total <= 0) return null;
                   return (
                     <div
-                      key={model}
+                      key={modelKey}
                       className={clsx(
                         "w-full",
-                        modelColor.get(model) ?? "bg-accent",
+                        modelColor.get(modelKey) ?? "bg-accent",
                       )}
                       style={{ height: `${(t / b.total) * 100}%` }}
                     />
@@ -249,14 +256,13 @@ function TokenChart({
   );
 }
 
-function ModelLegend({
+function ModelTable({
   models,
   modelColor,
 }: {
   models: ActivityModelUsage[];
   modelColor: Map<string, string>;
 }): React.JSX.Element {
-  const grandTotal = models.reduce((s, m) => s + m.input + m.output, 0);
   if (models.length === 0) {
     return (
       <div className="py-4 text-center text-xs text-faint">
@@ -264,32 +270,75 @@ function ModelLegend({
       </div>
     );
   }
+  const grandTotal = models.reduce((s, m) => s + usageTotal(m), 0);
   return (
-    <div className="space-y-1.5">
-      {models.map((m) => {
-        const total = m.input + m.output;
-        const pct = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
-        return (
-          <div key={m.model} className="flex items-center gap-2 text-xs">
-            <span
-              className={clsx(
-                "h-2 w-2 shrink-0 rounded-full",
-                modelColor.get(m.model) ??
-                  "bg-neutral-500" /* theme-exempt: categorical palette */,
-              )}
-            />
-            <span className="min-w-0 flex-1 truncate text-secondary">
-              {modelLabel(m)}
-            </span>
-            <span className="shrink-0 tabular-nums text-dim">
-              输入 {formatCompact(m.input)} · 输出 {formatCompact(m.output)}
-            </span>
-            <span className="w-12 shrink-0 text-right tabular-nums text-muted">
-              {pct.toFixed(1)}%
-            </span>
-          </div>
-        );
-      })}
+    <div className="overflow-x-auto">
+      <div className="min-w-[620px]">
+        {/* Header */}
+        <div className="flex items-center gap-2 border-b border-border pb-1.5 text-[10px] uppercase tracking-wide text-faint">
+          <span className="w-2 shrink-0" />
+          <span className="w-20 shrink-0">提供商</span>
+          <span className="min-w-0 flex-1">模型</span>
+          <span className="w-14 shrink-0 text-right">输入</span>
+          <span className="w-14 shrink-0 text-right">输出</span>
+          <span className="w-14 shrink-0 text-right">缓存读</span>
+          <span className="w-14 shrink-0 text-right">缓存写</span>
+          <span className="w-14 shrink-0 text-right">总计</span>
+          <span className="w-16 shrink-0 text-right">费用</span>
+          <span className="w-12 shrink-0 text-right">占比</span>
+        </div>
+        {models.map((m) => {
+          const total = usageTotal(m);
+          const pct = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
+          return (
+            <div
+              key={m.modelKey}
+              className="flex items-center gap-2 py-1.5 text-xs"
+            >
+              <span
+                className={clsx(
+                  "h-2 w-2 shrink-0 rounded-full",
+                  modelColor.get(m.modelKey) ??
+                    "bg-neutral-500" /* theme-exempt: categorical palette */,
+                )}
+              />
+              <span
+                className="w-20 shrink-0 truncate text-dim"
+                title={m.provider ?? undefined}
+              >
+                {providerLabel(m)}
+              </span>
+              <span
+                className="min-w-0 flex-1 truncate text-secondary"
+                title={m.model}
+              >
+                {modelDisplayName(m)}
+              </span>
+              <span className="w-14 shrink-0 text-right tabular-nums text-dim">
+                {formatCompact(m.input)}
+              </span>
+              <span className="w-14 shrink-0 text-right tabular-nums text-dim">
+                {formatCompact(m.output)}
+              </span>
+              <span className="w-14 shrink-0 text-right tabular-nums text-dim">
+                {formatCompact(m.cacheRead)}
+              </span>
+              <span className="w-14 shrink-0 text-right tabular-nums text-dim">
+                {formatCompact(m.cacheWrite)}
+              </span>
+              <span className="w-14 shrink-0 text-right tabular-nums text-secondary">
+                {formatCompact(total)}
+              </span>
+              <span className="w-16 shrink-0 text-right tabular-nums text-secondary">
+                {formatCost(m.cost)}
+              </span>
+              <span className="w-12 shrink-0 text-right tabular-nums text-muted">
+                {pct.toFixed(1)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -328,14 +377,18 @@ export function StatsPanel(): React.JSX.Element | null {
   if (!data || data.ranges["365"].messages === 0) return null;
 
   const stats = data.ranges[range];
-  const favoriteModel = stats.models[0] ? modelLabel(stats.models[0]) : "—";
+  const favoriteModel = stats.models[0]
+    ? modelDisplayName(stats.models[0])
+    : "—";
 
-  // Shared model→color mapping (largest-first) so the stacked bars and the
-  // legend agree on colors.
-  const orderedModels = stats.models.map((m) => m.model);
+  // Shared model-key→color mapping (largest-first) so the stacked bars and the
+  // model table agree on colors. Keys are modelKey (provider/id or bare id) —
+  // the same keys tokensByModel aggregates by — while display names stay
+  // name ?? model, so same-named models remain distinguishable via provider.
+  const orderedModels = stats.models.map((m) => m.modelKey);
   const modelColor = new Map<string, string>(
-    orderedModels.map((model, i) => [
-      model,
+    orderedModels.map((modelKey, i) => [
+      modelKey,
       MODEL_DOT_COLORS[i % MODEL_DOT_COLORS.length],
     ]),
   );
@@ -380,13 +433,30 @@ export function StatsPanel(): React.JSX.Element | null {
 
       {tab === "overview" ? (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
             <StatCard label="会话数" value={stats.sessions.toLocaleString()} />
             <StatCard label="消息数" value={stats.messages.toLocaleString()} />
             <StatCard
               label="Token 总数"
               value={formatCompact(stats.totalTokens)}
             />
+            <StatCard
+              label="输入 Token"
+              value={formatCompact(stats.inputTokens)}
+            />
+            <StatCard
+              label="输出 Token"
+              value={formatCompact(stats.outputTokens)}
+            />
+            <StatCard
+              label="缓存读取"
+              value={formatCompact(stats.cacheReadTokens)}
+            />
+            <StatCard
+              label="缓存写入"
+              value={formatCompact(stats.cacheWriteTokens)}
+            />
+            <StatCard label="总费用" value={formatCost(stats.totalCost)} />
             <StatCard
               label="活跃天数"
               value={stats.activeDays.toLocaleString()}
@@ -415,7 +485,7 @@ export function StatsPanel(): React.JSX.Element | null {
             modelColor={modelColor}
           />
           <div className="mt-4 border-t border-border pt-3">
-            <ModelLegend models={stats.models} modelColor={modelColor} />
+            <ModelTable models={stats.models} modelColor={modelColor} />
           </div>
         </>
       )}

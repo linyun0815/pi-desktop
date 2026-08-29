@@ -3,11 +3,47 @@ import {
   type ThinkingLevelMap,
 } from "./model-thinking";
 
+/**
+ * Model API families the desktop's model discovery understands. Unknown API
+ * strings remain saveable (Pi owns the full set); they just cannot run
+ * provider /models discovery.
+ */
+export const MODEL_API_TYPES = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const;
+export type ModelApiType = (typeof MODEL_API_TYPES)[number];
+
+/** USD per million tokens for one tier band. */
+export interface CustomModelCostTier {
+  /** The tier applies to inputs above this many tokens. */
+  inputTokensAbove: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface CustomModelCost {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** SDK tiered pricing; the editor keeps existing tiers untouched. */
+  tiers?: CustomModelCostTier[];
+}
+
+/**
+ * Aggregate key for per-model usage stats: provider + model id, so the same
+ * model id under two providers stays separate. Records without a provider
+ * (legacy data) fall back to the bare model id.
+ */
+export function modelUsageKey(provider: string | null, modelId: string): string {
+  const id = modelId.trim();
+  const prov = provider?.trim();
+  return prov ? `${prov}/${id}` : id;
 }
 
 export interface ModelCompat {
@@ -52,6 +88,61 @@ const NUMERIC_MODEL_FIELDS: Array<keyof CustomModel> = [
   "maxTokens",
 ];
 
+const COST_RATE_FIELDS = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+] as const;
+
+/** All four base rates present and finite/non-negative? */
+function isValidRate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** Validate one cost object (base rates + tiers); returns error strings. */
+function validateModelCost(
+  cost: unknown,
+  label: string,
+): string[] {
+  if (typeof cost !== "object" || cost === null || Array.isArray(cost)) {
+    return [`${label}：cost 必须是对象`];
+  }
+  const errors: string[] = [];
+  const c = cost as Record<string, unknown>;
+  for (const field of COST_RATE_FIELDS) {
+    if (c[field] !== undefined && !isValidRate(c[field])) {
+      errors.push(`${label}：cost.${field} 必须是有限且非负的数字`);
+    }
+  }
+  if (c.tiers !== undefined) {
+    if (!Array.isArray(c.tiers)) {
+      errors.push(`${label}：cost.tiers 必须是数组`);
+    } else {
+      c.tiers.forEach((tier, i) => {
+        if (typeof tier !== "object" || tier === null || Array.isArray(tier)) {
+          errors.push(`${label}：cost.tiers[${i}] 必须是对象`);
+          return;
+        }
+        const t = tier as Record<string, unknown>;
+        if (!isValidRate(t.inputTokensAbove)) {
+          errors.push(
+            `${label}：cost.tiers[${i}].inputTokensAbove 必须是有限且非负的数字`,
+          );
+        }
+        for (const field of COST_RATE_FIELDS) {
+          if (t[field] !== undefined && !isValidRate(t[field])) {
+            errors.push(
+              `${label}：cost.tiers[${i}].${field} 必须是有限且非负的数字`,
+            );
+          }
+        }
+      });
+    }
+  }
+  return errors;
+}
+
 /**
  * Validate a models config. Returns human-readable error strings; an empty array
  * means valid. Provider keys are inherently unique in the object, so duplicate-key
@@ -85,6 +176,14 @@ export function validateModelsConfig(config: ModelsConfig): string[] {
           errors.push(`提供商“${key}”、模型“${id}”：${field} 必须是有限数字`);
         }
       }
+      if (model.cost !== undefined) {
+        errors.push(
+          ...validateModelCost(
+            model.cost,
+            `提供商“${key}”、模型“${id}”`,
+          ),
+        );
+      }
       errors.push(
         ...validateThinkingLevelMap(
           model.thinkingLevelMap,
@@ -97,6 +196,30 @@ export function validateModelsConfig(config: ModelsConfig): string[] {
 }
 
 /**
+ * Fill a partial cost draft into the full four-rate shape the SDK expects:
+ * missing base rates become 0 (zero is a legal free price). Tiers pass
+ * through untouched. Returns null for a non-object cost.
+ */
+export function normalizeModelCost(
+  cost: CustomModelCost,
+): CustomModelCost | null {
+  if (typeof cost !== "object" || cost === null || Array.isArray(cost)) {
+    return null;
+  }
+  const c = cost as unknown as Record<string, unknown>;
+  const filled: CustomModelCost = {
+    input: isValidRate(c.input) ? (c.input as number) : 0,
+    output: isValidRate(c.output) ? (c.output as number) : 0,
+    cacheRead: isValidRate(c.cacheRead) ? (c.cacheRead as number) : 0,
+    cacheWrite: isValidRate(c.cacheWrite) ? (c.cacheWrite as number) : 0,
+  };
+  if (Array.isArray(c.tiers) && c.tiers.length > 0) {
+    filled.tiers = c.tiers as CustomModelCostTier[];
+  }
+  return filled;
+}
+
+/**
  * Produce the object to write to models.json. Overlays edited known fields onto
  * the original so unknown fields (top-level, per-provider, per-model) are kept.
  * Providers/models absent from `edited` are dropped; new ones are added.
@@ -104,6 +227,10 @@ export function validateModelsConfig(config: ModelsConfig): string[] {
  * `thinkingLevelMap` is editor-owned: when the edited model carries one it
  * replaces the original outright (an empty map means "remove the optional
  * field"), so a cleared mapping cannot re-merge from the old value.
+ *
+ * `cost` is editor-owned the same way: absent from the edited model keeps the
+ * original, a non-empty object replaces + normalizes it (missing base rates
+ * fill as 0), an empty object removes it.
  */
 export function mergeModelsConfig(
   original: ModelsConfig,
@@ -114,7 +241,7 @@ export function mergeModelsConfig(
     const origProv = original.providers?.[key] ?? {};
     const origModels = origProv.models ?? [];
     const mergedModels = (prov.models ?? []).map((m) => {
-      const { thinkingLevelMap: editedMap, ...restEdited } = m;
+      const { thinkingLevelMap: editedMap, cost: editedCost, ...restEdited } = m;
       const origModel = origModels.find((o) => o.id === m.id) ?? {};
       const merged: CustomModel = { ...origModel, ...restEdited };
       if (editedMap !== undefined) {
@@ -125,6 +252,33 @@ export function mergeModelsConfig(
           merged.thinkingLevelMap = Object.fromEntries(normalizedEntries);
         } else {
           delete merged.thinkingLevelMap;
+        }
+      }
+      if (editedCost !== undefined) {
+        if (
+          typeof editedCost === "object" &&
+          editedCost !== null &&
+          !Array.isArray(editedCost) &&
+          Object.keys(editedCost).length > 0
+        ) {
+          const normalized = normalizeModelCost(editedCost);
+          if (normalized) {
+            // Replacement, but layered over the original cost so fields the
+            // editor does not expose — existing tiers, unknown extras —
+            // survive unless the edit carries its own value.
+            const origCost = (origModel as { cost?: unknown }).cost;
+            merged.cost =
+              typeof origCost === "object" &&
+              origCost !== null &&
+              !Array.isArray(origCost)
+                ? { ...origCost, ...normalized }
+                : normalized;
+          } else {
+            delete merged.cost;
+          }
+        } else {
+          // Empty (or invalid) cost object means "remove the cost field".
+          delete merged.cost;
         }
       }
       return merged;

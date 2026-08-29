@@ -4,6 +4,7 @@ import { useAppStore } from "../store";
 import { DEFAULT_AGENT_ENGINE_LABEL } from "../../../shared/agent-engine-label";
 import type { InstalledSkill } from "../../../shared/ipc-contracts";
 import { localizedStatus } from "../utils/ui-text";
+import { formatCompact, formatK, tokenBreakdown } from "../utils/stats-format";
 import { clsx } from "clsx";
 import {
   Activity,
@@ -68,6 +69,10 @@ export function StatusPopover(): React.JSX.Element {
         Math.max(0, Math.round(sessionStats.contextUsage.percent ?? 0)),
       )
     : 0;
+
+  // Four-kind session token split, normalized for older payloads. The row
+  // shows the four-kind total; the tooltip carries the per-kind breakdown.
+  const sessionTokens = tokenBreakdown(sessionStats?.tokens);
 
   // Load data when opened
   useEffect(() => {
@@ -276,7 +281,13 @@ export function StatusPopover(): React.JSX.Element {
                 />
                 <StatusRow
                   label="Token 数"
-                  value={`${((sessionStats.tokens.input + sessionStats.tokens.output) / 1000).toFixed(1)}k`}
+                  value={
+                    <span
+                      title={`输入 ${formatCompact(sessionTokens.input)} · 输出 ${formatCompact(sessionTokens.output)} · 缓存读 ${formatCompact(sessionTokens.cacheRead)} · 缓存写 ${formatCompact(sessionTokens.cacheWrite)}`}
+                    >
+                      {formatK(sessionTokens.total)}
+                    </span>
+                  }
                 />
                 <button
                   onClick={() => compactContext()}

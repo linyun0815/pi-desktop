@@ -128,6 +128,8 @@ export const IPC_CHANNELS = {
   // Models config
   MODELS_READ: "models:read",
   MODELS_WRITE: "models:write",
+  MODELS_CATALOG_LOOKUP: "models:catalogLookup",
+  MODELS_DISCOVER: "models:discover",
 
   // Council planning
   COUNCIL_DETECT: "council:detect",
@@ -795,30 +797,50 @@ export interface ActivityDay {
 }
 
 // ─── Activity stats (persisted, survives session deletion) ────────────────────
+//
+// Token accounting: every total is input + output + cacheRead + cacheWrite.
+// cacheWrite1h is a subset of cacheWrite and reasoning tokens are already part
+// of output, so neither is added separately.
 
 export interface ActivityStatsDay {
   date: string; // local calendar day, YYYY-MM-DD
   messages: number; // all `type === 'message'` records that day
-  tokens: number; // assistant input + output tokens that day (all models)
-  tokensByModel: Record<string, number>; // model id -> input + output that day
+  tokens: number; // assistant tokens that day (all models), four-kind sum
+  tokensByModel: Record<string, number>; // model usage key -> four-kind sum that day
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number; // assistant usage cost that day, from usage.cost.total
 }
 
 export interface ActivityModelUsage {
-  model: string; // stable model id (e.g. "claude-opus-4-8", "ornith-1.0-35b@q6_k")
+  model: string; // raw model id (e.g. "claude-opus-4-8", "ornith-1.0-35b@q6_k")
   name: string | null; // latest display name from models.json; null → fall back to id
+  provider: string | null; // provider key recorded on the assistant message; null when absent
+  modelKey: string; // stable aggregate key (provider/id, bare id without a provider)
   input: number;
   output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number; // input + output + cacheRead + cacheWrite
+  cost: number; // summed usage.cost.total
 }
 
 export interface ActivityRangeStats {
   sessions: number; // distinct sessions with activity in the range
   messages: number;
-  totalTokens: number; // input + output across all models
+  totalTokens: number; // four-kind sum across all models
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalCost: number;
   activeDays: number;
   currentStreak: number; // consecutive active days ending today (capped by range)
   longestStreak: number;
   peakHour: number | null; // busiest local hour 0..23, or null if no activity
-  models: ActivityModelUsage[]; // descending by input + output
+  models: ActivityModelUsage[]; // descending by total
 }
 
 // Range keys are trailing-day counts: 365 ("1y"), 180 ("6mo"), 90 ("3mo"), 30, 7.
@@ -891,7 +913,15 @@ export type {
   ModelsConfig,
   ProviderConfig,
   CustomModel,
+  CustomModelCost,
+  CustomModelCostTier,
 } from "./models-config";
+export {
+  MODEL_API_TYPES,
+  modelUsageKey,
+  normalizeModelCost,
+} from "./models-config";
+export type { ModelApiType } from "./models-config";
 export type {
   CouncilConfig,
   CouncilAgentId,
@@ -964,11 +994,80 @@ export interface CouncilProgressEvent {
 }
 
 import type { ModelsConfig as ModelsConfigType } from "./models-config";
+import type { CustomModelCost as CustomModelCostType } from "./models-config";
 import type { CouncilConfig } from "./council-config";
 /** Result of the MODELS_READ IPC call. */
 export type ModelsReadResult =
   | { config: ModelsConfigType }
   | { error: string; raw: string };
+
+// ─── Model metadata lookup (models.dev catalog + provider discovery) ─────────
+//
+// Suggestions only ever fill editor draft fields; they never carry credentials,
+// raw HTTP bodies, or authentication state.
+
+/**
+ * A fillable metadata suggestion for one model, in Pi-native field shapes.
+ * Absent fields mean "no reliable suggestion for this field".
+ */
+export interface ModelMetadataSuggestion {
+  name?: string;
+  reasoning?: boolean;
+  /** Input modalities (e.g. ["text","image"]). */
+  input?: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  /** USD-per-million-token rates; only present when prices are reliable. */
+  cost?: CustomModelCostType;
+}
+
+/** How the catalog matched this model; drives reliability annotations. */
+export type ModelCatalogMatchKind = "exact" | "baseUrl" | "consensus" | "none";
+
+/** Result of a models.dev catalog lookup for one model. */
+export interface ModelCatalogMatch {
+  modelId: string;
+  match: ModelCatalogMatchKind;
+  metadata: ModelMetadataSuggestion;
+  /** True when the suggested prices came from an exact, conflict-free entry. */
+  priceReliable: boolean;
+  /** Human-readable notes (e.g. price conflict, name-only match). May be empty. */
+  warnings: string[];
+}
+
+export interface ModelCatalogLookupRequest {
+  modelId: string;
+  /** Provider key in the editor; narrows exact matching. */
+  providerId?: string;
+  /** Provider base URL; enables host-based catalog matching. */
+  baseUrl?: string;
+}
+
+export type ModelCatalogLookupResult =
+  | { ok: true; match: ModelCatalogMatch }
+  | { ok: false; error: string };
+
+/**
+ * MODELS_DISCOVER request. `apiKey` is the editor's draft value, used only to
+ * build a one-off temp models.json in main; it is never forwarded over the
+ * helper protocol, logged, or echoed back.
+ */
+export interface ModelDiscoveryRequest {
+  providerId: string;
+  baseUrl?: string;
+  api?: string;
+  apiKey?: string | null;
+}
+
+/** One discovered model: id plus an optional display name. Nothing else. */
+export interface ModelDiscoveryModel {
+  id: string;
+  name?: string;
+}
+
+export type ModelDiscoveryResult =
+  | { ok: true; models: ModelDiscoveryModel[] }
+  | { ok: false; error: string };
 
 // ─── Agent Message Types ────────────────────────────────────────────────────
 

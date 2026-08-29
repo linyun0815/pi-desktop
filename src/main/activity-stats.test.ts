@@ -17,17 +17,43 @@ function isoOn(day: string, hour = 12): string {
 interface MsgOpts {
   role?: "user" | "assistant";
   model?: string;
+  provider?: string | null;
   input?: number;
   output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  /** Raw usage.cost object; overrides the default {input,output} shape. */
+  cost?: unknown;
+  /** Extra usage fields (e.g. cacheWrite1h) to verify they are ignored. */
+  extraUsage?: Record<string, unknown>;
   hour?: number;
 }
 
 function messageLine(day: string, opts: MsgOpts = {}): string {
-  const { role = "user", model, input = 0, output = 0, hour = 12 } = opts;
+  const {
+    role = "user",
+    model,
+    provider,
+    input = 0,
+    output = 0,
+    cacheRead = 0,
+    cacheWrite = 0,
+    cost,
+    extraUsage,
+    hour = 12,
+  } = opts;
   const message: Record<string, unknown> = { role };
   if (role === "assistant" && model) {
     message.model = model;
-    message.usage = { input, output };
+    if (provider !== undefined) message.provider = provider;
+    message.usage = {
+      input,
+      output,
+      ...(cacheRead !== 0 ? { cacheRead } : {}),
+      ...(cacheWrite !== 0 ? { cacheWrite } : {}),
+      ...extraUsage,
+      ...(cost !== undefined ? { cost } : {}),
+    };
   }
   return JSON.stringify({
     type: "message",
@@ -340,6 +366,324 @@ test("prunes sessions older than the retention window", async () => {
   const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
   const result = await store.computeStats(NOW);
   assert.equal(result.ranges["365"].messages, 0);
+
+  await rm(root, { recursive: true, force: true });
+});
+
+// ─── Four-kind token accounting (v2) ────────────────────────────────────────
+
+test("aggregates four token kinds and cost; total is the four-kind sum", async () => {
+  const { root, storePath } = await makeDirs();
+  await writeFile(
+    join(root, "s1.jsonl"),
+    messageLine("2026-07-04", {
+      role: "assistant",
+      model: "claude-opus-4-8",
+      provider: "anthropic",
+      input: 100,
+      output: 50,
+      cacheRead: 1000,
+      cacheWrite: 20,
+      cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0002, total: 0.0033 },
+    }),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const year = (await store.computeStats(NOW)).ranges["365"];
+
+  assert.equal(year.totalTokens, 1170);
+  assert.equal(year.inputTokens, 100);
+  assert.equal(year.outputTokens, 50);
+  assert.equal(year.cacheReadTokens, 1000);
+  assert.equal(year.cacheWriteTokens, 20);
+  assert.equal(year.totalCost, 0.0033);
+  assert.equal(year.models.length, 1);
+  const m = year.models[0];
+  assert.equal(m.model, "claude-opus-4-8");
+  assert.equal(m.provider, "anthropic");
+  assert.equal(m.modelKey, "anthropic/claude-opus-4-8");
+  assert.equal(m.total, 1170);
+  assert.equal(m.cost, 0.0033);
+  // Per-day series agrees with the range rollup.
+  const day = result_days(await store.computeStats(NOW), "2026-07-04");
+  assert.equal(day.tokens, 1170);
+  assert.equal(day.cost, 0.0033);
+  assert.equal(
+    day.tokensByModel["anthropic/claude-opus-4-8"],
+    1170,
+  );
+
+  await rm(root, { recursive: true, force: true });
+});
+
+function result_days(result: Awaited<ReturnType<ActivityStatsStore["computeStats"]>>, date: string) {
+  return result.days.find((d) => d.date === date)!;
+}
+
+test("same model id under two providers stays separate", async () => {
+  const { root, storePath } = await makeDirs();
+  await writeFile(
+    join(root, "s1.jsonl"),
+    [
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "same-model",
+        provider: "alpha",
+        input: 10,
+        output: 5,
+        cost: { total: 0.01 },
+      }),
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "same-model",
+        provider: "beta",
+        input: 20,
+        output: 5,
+        cost: { total: 0.02 },
+      }),
+    ].join("\n"),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const models = (await store.computeStats(NOW)).ranges["365"].models;
+
+  assert.equal(models.length, 2);
+  const alpha = models.find((m) => m.provider === "alpha");
+  const beta = models.find((m) => m.provider === "beta");
+  assert.equal(alpha?.modelKey, "alpha/same-model");
+  assert.equal(alpha?.input, 10);
+  assert.equal(alpha?.cost, 0.01);
+  assert.equal(beta?.modelKey, "beta/same-model");
+  assert.equal(beta?.input, 20);
+  assert.equal(beta?.cost, 0.02);
+  // And the range total covers both rows without cross-contamination.
+  assert.equal(
+    (await store.computeStats(NOW)).ranges["365"].totalTokens,
+    40,
+  );
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test("cost falls back to component sum, then zero; illegal values are zeroed", async () => {
+  const { root, storePath } = await makeDirs();
+  await writeFile(
+    join(root, "s1.jsonl"),
+    [
+      // No cost at all → 0.
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "m1",
+        provider: "p",
+        input: 1,
+        output: 1,
+      }),
+      // cost.total missing → finite components sum.
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "m2",
+        provider: "p",
+        input: 1,
+        output: 1,
+        cost: { input: 0.5, output: 0.25, cacheRead: "x" },
+      }),
+      // Illegal token/cost values zero out instead of poisoning with NaN.
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "m3",
+        provider: "p",
+        input: Number.NaN,
+        output: "zzz" as unknown as number,
+        cost: { total: Number.NaN },
+      }),
+    ].join("\n"),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const year = (await store.computeStats(NOW)).ranges["365"];
+  const byId = new Map(year.models.map((m) => [m.model, m]));
+
+  assert.equal(year.totalCost, 0.75);
+  assert.equal(byId.get("m1")?.cost, 0);
+  assert.equal(byId.get("m2")?.cost, 0.75);
+  assert.equal(byId.get("m3")?.input, 0);
+  assert.equal(byId.get("m3")?.output, 0);
+  assert.equal(byId.get("m3")?.cost, 0);
+  assert.ok(Number.isFinite(year.totalTokens));
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test("cacheWrite1h is not double-counted", async () => {
+  const { root, storePath } = await makeDirs();
+  await writeFile(
+    join(root, "s1.jsonl"),
+    messageLine("2026-07-04", {
+      role: "assistant",
+      model: "m1",
+      provider: "p",
+      input: 10,
+      output: 10,
+      cacheRead: 100,
+      cacheWrite: 5,
+      extraUsage: { cacheWrite1h: 4 },
+    }),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const year = (await store.computeStats(NOW)).ranges["365"];
+  assert.equal(year.totalTokens, 125);
+  assert.equal(year.cacheWriteTokens, 5);
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test("resolves names by provider/id key with bare-id fallback", async () => {
+  const { root, storePath } = await makeDirs();
+  const modelsConfigPath = join(root, "..", "models.json");
+  await writeFile(
+    modelsConfigPath,
+    JSON.stringify({
+      providers: {
+        alpha: { models: [{ id: "shared", name: "Alpha Shared" }] },
+        beta: { models: [{ id: "shared", name: "Beta Shared" }] },
+        solo: { models: [{ id: "only-here", name: "Solo Name" }] },
+      },
+    }),
+  );
+  await writeFile(
+    join(root, "s1.jsonl"),
+    [
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "shared",
+        provider: "alpha",
+        input: 3,
+        output: 1,
+      }),
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "shared",
+        provider: "beta",
+        input: 2,
+        output: 1,
+      }),
+      // No provider on the message → bare-id fallback name.
+      messageLine("2026-07-04", {
+        role: "assistant",
+        model: "only-here",
+        input: 1,
+        output: 1,
+      }),
+    ].join("\n"),
+  );
+
+  const store = new ActivityStatsStore({
+    sessionsRoot: root,
+    storePath,
+    modelsConfigPath,
+  });
+  const models = (await store.computeStats(NOW)).ranges["365"].models;
+  assert.equal(
+    models.find((m) => m.modelKey === "alpha/shared")?.name,
+    "Alpha Shared",
+  );
+  assert.equal(
+    models.find((m) => m.modelKey === "beta/shared")?.name,
+    "Beta Shared",
+  );
+  assert.equal(
+    models.find((m) => m.model === "only-here")?.name,
+    "Solo Name",
+  );
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test("migrates a v1 store: zero-fills new fields and re-parses live files", async () => {
+  const { root, storePath } = await makeDirs();
+  const file = join(root, "s1.jsonl");
+  await writeFile(
+    file,
+    messageLine("2026-07-04", {
+      role: "assistant",
+      model: "m1",
+      provider: "p",
+      input: 10,
+      output: 10,
+      cacheRead: 500,
+      cacheWrite: 5,
+      cost: { total: 0.02 },
+    }),
+  );
+
+  // Hand-write a v1-shaped store pointing at the live file (old bucket shape).
+  await writeFile(
+    storePath,
+    JSON.stringify({
+      version: 1,
+      sessions: {
+        [file]: {
+          filePath: file,
+          mtimeMs: 1, // stale: real mtime differs, so a v2 scan re-parses
+          days: {
+            "2026-07-04": {
+              messages: 1,
+              models: { m1: { input: 10, output: 10 } },
+              hours: { "12": 1 },
+            },
+          },
+        },
+      },
+      modelNames: { m1: "Legacy Name" },
+    }),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const year = (await store.computeStats(NOW)).ranges["365"];
+
+  // Live file re-parsed: real cache/cost restored.
+  assert.equal(year.totalTokens, 525);
+  assert.equal(year.totalCost, 0.02);
+  assert.equal(year.models[0].modelKey, "p/m1");
+
+  await rm(root, { recursive: true, force: true });
+});
+
+test("v1 store for a deleted session keeps its aggregate with zero new fields", async () => {
+  const { root, storePath } = await makeDirs();
+  await writeFile(
+    storePath,
+    JSON.stringify({
+      version: 1,
+      sessions: {
+        "gone.jsonl": {
+          filePath: "gone.jsonl",
+          mtimeMs: 1,
+          days: {
+            "2026-07-04": {
+              messages: 2,
+              models: { m1: { input: 7, output: 3 } },
+              hours: { "12": 2 },
+            },
+          },
+        },
+      },
+      modelNames: {},
+    }),
+  );
+
+  const store = new ActivityStatsStore({ sessionsRoot: root, storePath });
+  const year = (await store.computeStats(NOW)).ranges["365"];
+
+  assert.equal(year.messages, 2);
+  assert.equal(year.totalTokens, 10); // legacy input+output preserved
+  assert.equal(year.cacheReadTokens, 0);
+  assert.equal(year.cacheWriteTokens, 0);
+  assert.equal(year.totalCost, 0);
+  assert.equal(year.models[0].model, "m1");
+  assert.equal(year.models[0].provider, null);
+  assert.equal(year.models[0].total, 10);
 
   await rm(root, { recursive: true, force: true });
 });

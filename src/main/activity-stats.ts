@@ -11,6 +11,7 @@ import {
 import { dirname, join, resolve } from "path";
 import { getPiAgentDir, getSessionRoots } from "./pi-paths";
 import { getGuiDataPath } from "./app-data-paths";
+import { modelUsageKey } from "../shared/models-config";
 import type {
   ActivityStatsResult,
   ActivityRangeStats,
@@ -27,11 +28,26 @@ const RANGE_DAYS: Record<ActivityRangeKey, number> = {
   "7": 7,
 };
 const STORE_FILE_NAME = "activity-stats.json";
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const JSONL_EXTENSION = ".jsonl";
 const MESSAGE_RECORD_TYPE = "message";
 const MS_PER_DAY = 86_400_000;
 const SAVE_DEBOUNCE_MS = 2000;
+
+/**
+ * One model's persisted usage inside a day bucket. Totals are always the sum
+ * of the four raw token kinds; `cacheWrite1h` (a subset of cacheWrite) and
+ * reasoning tokens (already inside output) are never added separately.
+ */
+interface DayModelUsage {
+  model: string; // raw model id as recorded on the assistant message
+  provider: string | null; // provider key from the message; null for legacy data
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number; // USD, from usage.cost.total (fallback: cost components)
+}
 
 /**
  * Per-day rollup for one session. Kept minimal but at day granularity so the
@@ -40,7 +56,7 @@ const SAVE_DEBOUNCE_MS = 2000;
  */
 interface DayBucket {
   messages: number; // all message records that day (user + assistant)
-  models: Record<string, { input: number; output: number }>; // assistant token usage by model
+  models: Record<string, DayModelUsage>; // modelUsageKey -> usage
   hours: Record<string, number>; // local hour (0..23, as string) -> message count
 }
 
@@ -81,6 +97,28 @@ function toFiniteNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Provider key from an assistant message; non-strings normalize to null. */
+function providerKeyOf(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Message cost in USD: prefer a finite `usage.cost.total`; only when it is
+ * absent fall back to the sum of the finite cost components. Historical cost
+ * is never re-estimated from current model prices.
+ */
+function resolveMessageCost(cost: unknown): number {
+  if (typeof cost !== "object" || cost === null) return 0;
+  const c = cost as Record<string, unknown>;
+  if (typeof c.total === "number" && Number.isFinite(c.total)) return c.total;
+  return (
+    toFiniteNumber(c.input) +
+    toFiniteNumber(c.output) +
+    toFiniteNumber(c.cacheRead) +
+    toFiniteNumber(c.cacheWrite)
+  );
+}
+
 /** Stable aggregate key that keeps same-named sessions from Pi and OMP apart. */
 function sessionStoreKey(filePath: string): string {
   const normalized = resolve(filePath);
@@ -118,8 +156,15 @@ function parseSessionContent(content: string): Record<string, DayBucket> {
     const msg = rec.message as
       | {
           role?: unknown;
+          provider?: unknown;
           model?: unknown;
-          usage?: { input?: unknown; output?: unknown };
+          usage?: {
+            input?: unknown;
+            output?: unknown;
+            cacheRead?: unknown;
+            cacheWrite?: unknown;
+            cost?: unknown;
+          };
         }
       | undefined;
     if (
@@ -130,9 +175,22 @@ function parseSessionContent(content: string): Record<string, DayBucket> {
       msg.usage &&
       typeof msg.usage === "object"
     ) {
-      const model = (bucket.models[msg.model] ??= { input: 0, output: 0 });
-      model.input += toFiniteNumber(msg.usage.input);
-      model.output += toFiniteNumber(msg.usage.output);
+      const usage = msg.usage;
+      const key = modelUsageKey(providerKeyOf(msg.provider), msg.model);
+      const model = (bucket.models[key] ??= {
+        model: msg.model,
+        provider: providerKeyOf(msg.provider),
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+      });
+      model.input += toFiniteNumber(usage.input);
+      model.output += toFiniteNumber(usage.output);
+      model.cacheRead += toFiniteNumber(usage.cacheRead);
+      model.cacheWrite += toFiniteNumber(usage.cacheWrite);
+      model.cost += resolveMessageCost(usage.cost);
     }
   }
   return days;
@@ -228,6 +286,32 @@ export class ActivityStatsStore {
               typeof entry.filePath !== "string"
             )
               continue;
+            // v1 buckets carried only input/output and were keyed by bare
+            // model id: zero-fill the new fields and force a re-parse (mtime
+            // sentinel) so live files restore real cache/cost values from
+            // their JSONL. Deleted sessions keep their aggregate, showing
+            // recoverable zeros for the new fields.
+            if (p.version !== STORE_VERSION) {
+              entry.mtimeMs = -1;
+              for (const [, usage] of Object.entries(entry.days ?? {})) {
+                if (!usage || typeof usage.models !== "object") continue;
+                const models: Record<string, DayModelUsage> = {};
+                for (const [modelKey, u] of Object.entries(usage.models)) {
+                  if (!u || typeof u !== "object") continue;
+                  const legacy = u as { input?: unknown; output?: unknown };
+                  models[modelKey] = {
+                    model: u.model ?? modelKey,
+                    provider: u.provider ?? null,
+                    input: toFiniteNumber(legacy.input),
+                    output: toFiniteNumber(legacy.output),
+                    cacheRead: toFiniteNumber(u.cacheRead),
+                    cacheWrite: toFiniteNumber(u.cacheWrite),
+                    cost: toFiniteNumber(u.cost),
+                  };
+                }
+                usage.models = models;
+              }
+            }
             const key = sessionStoreKey(entry.filePath);
             const previous = sessions[key];
             if (!previous || entry.mtimeMs >= previous.mtimeMs)
@@ -250,12 +334,21 @@ export class ActivityStatsStore {
 
   /**
    * Refresh id→name mappings from models.json (last-one-wins across providers).
-   * Overwrites with current names (so the latest label wins) but never deletes,
-   * so a model removed from models.json keeps its last-known name. Returns true
-   * if anything changed.
+   * Each named model is recorded under BOTH its `provider/id` usage key and the
+   * bare model id: the provider key disambiguates same-id models across
+   * providers, the bare id keeps serving v1-era aggregates and records that
+   * predate provider attribution. Overwrites with current names (so the latest
+   * label wins) but never deletes, so a model removed from models.json keeps
+   * its last-known name. Returns true if anything changed.
    */
   private updateModelNames(): boolean {
     let changed = false;
+    const record = (key: string, name: string): void => {
+      if (this.store.modelNames[key] !== name) {
+        this.store.modelNames[key] = name;
+        changed = true;
+      }
+    };
     for (const modelsPath of this.modelsPaths()) {
       try {
         const parsed = JSON.parse(readFileSync(modelsPath, "utf-8")) as {
@@ -266,18 +359,16 @@ export class ActivityStatsStore {
         };
         const providers = parsed.providers;
         if (!providers || typeof providers !== "object") continue;
-        for (const provider of Object.values(providers)) {
-          if (!provider || !Array.isArray(provider.models)) continue;
-          for (const model of provider.models) {
+        for (const [provider, prov] of Object.entries(providers)) {
+          if (!prov || !Array.isArray(prov.models)) continue;
+          for (const model of prov.models) {
             if (
               typeof model?.id === "string" &&
               typeof model?.name === "string" &&
               model.name.length > 0
             ) {
-              if (this.store.modelNames[model.id] !== model.name) {
-                this.store.modelNames[model.id] = model.name;
-                changed = true;
-              }
+              record(modelUsageKey(provider, model.id), model.name);
+              record(model.id, model.name);
             }
           }
         }
@@ -427,7 +518,12 @@ export class ActivityStatsStore {
     interface PooledDay {
       messages: number;
       tokens: number;
-      models: Map<string, { input: number; output: number }>;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      cost: number;
+      models: Map<string, DayModelUsage>;
       hours: number[];
       sessions: Set<string>;
     }
@@ -438,6 +534,11 @@ export class ActivityStatsStore {
         d = {
           messages: 0,
           tokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cost: 0,
           models: new Map(),
           hours: new Array(24).fill(0),
           sessions: new Set(),
@@ -453,12 +554,25 @@ export class ActivityStatsStore {
         const d = dayOf(dayKey);
         d.messages += bucket.messages;
         d.sessions.add(id);
-        for (const [model, usage] of Object.entries(bucket.models)) {
-          d.tokens += usage.input + usage.output;
-          const m = d.models.get(model) ?? { input: 0, output: 0 };
-          m.input += usage.input;
-          m.output += usage.output;
-          d.models.set(model, m);
+        for (const [modelKey, usage] of Object.entries(bucket.models)) {
+          const total =
+            usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+          d.tokens += total;
+          d.inputTokens += usage.input;
+          d.outputTokens += usage.output;
+          d.cacheReadTokens += usage.cacheRead;
+          d.cacheWriteTokens += usage.cacheWrite;
+          d.cost += usage.cost;
+          const m = d.models.get(modelKey);
+          if (m) {
+            m.input += usage.input;
+            m.output += usage.output;
+            m.cacheRead += usage.cacheRead;
+            m.cacheWrite += usage.cacheWrite;
+            m.cost += usage.cost;
+          } else {
+            d.models.set(modelKey, { ...usage });
+          }
         }
         for (const [hourKey, count] of Object.entries(bucket.hours)) {
           const h = Number(hourKey);
@@ -475,14 +589,22 @@ export class ActivityStatsStore {
       );
       const d = perDay.get(key);
       const tokensByModel: Record<string, number> = {};
-      if (d)
-        for (const [model, u] of d.models)
-          tokensByModel[model] = u.input + u.output;
+      if (d) {
+        for (const [modelKey, u] of d.models) {
+          tokensByModel[modelKey] =
+            u.input + u.output + u.cacheRead + u.cacheWrite;
+        }
+      }
       days.push({
         date: key,
         messages: d?.messages ?? 0,
         tokens: d?.tokens ?? 0,
         tokensByModel,
+        inputTokens: d?.inputTokens ?? 0,
+        outputTokens: d?.outputTokens ?? 0,
+        cacheReadTokens: d?.cacheReadTokens ?? 0,
+        cacheWriteTokens: d?.cacheWriteTokens ?? 0,
+        cost: d?.cost ?? 0,
       });
     }
 
@@ -500,7 +622,7 @@ export class ActivityStatsStore {
       {
         messages: number;
         tokens: number;
-        models: Map<string, { input: number; output: number }>;
+        models: Map<string, DayModelUsage>;
         hours: number[];
         sessions: Set<string>;
       }
@@ -515,9 +637,14 @@ export class ActivityStatsStore {
 
     let messages = 0;
     let totalTokens = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let totalCost = 0;
     let activeDays = 0;
     const sessions = new Set<string>();
-    const models = new Map<string, { input: number; output: number }>();
+    const models = new Map<string, DayModelUsage>();
     const hours = new Array(24).fill(0);
     const activeDayKeys = new Set<string>();
 
@@ -530,11 +657,22 @@ export class ActivityStatsStore {
       messages += d.messages;
       totalTokens += d.tokens;
       for (const id of d.sessions) sessions.add(id);
-      for (const [model, usage] of d.models) {
-        const m = models.get(model) ?? { input: 0, output: 0 };
-        m.input += usage.input;
-        m.output += usage.output;
-        models.set(model, m);
+      for (const [modelKey, usage] of d.models) {
+        inputTokens += usage.input;
+        outputTokens += usage.output;
+        cacheReadTokens += usage.cacheRead;
+        cacheWriteTokens += usage.cacheWrite;
+        totalCost += usage.cost;
+        const m = models.get(modelKey);
+        if (m) {
+          m.input += usage.input;
+          m.output += usage.output;
+          m.cacheRead += usage.cacheRead;
+          m.cacheWrite += usage.cacheWrite;
+          m.cost += usage.cost;
+        } else {
+          models.set(modelKey, { ...usage });
+        }
       }
       for (let h = 0; h < 24; h++) hours[h] += d.hours[h];
     }
@@ -550,13 +688,19 @@ export class ActivityStatsStore {
     }
 
     const modelList = [...models.entries()]
-      .map(([model, u]) => ({
-        model,
-        name: this.store.modelNames[model] ?? null,
+      .map(([modelKey, u]) => ({
+        model: u.model,
+        name: this.modelNameFor(u.provider, u.model),
+        provider: u.provider,
+        modelKey,
         input: u.input,
         output: u.output,
+        cacheRead: u.cacheRead,
+        cacheWrite: u.cacheWrite,
+        total: u.input + u.output + u.cacheRead + u.cacheWrite,
+        cost: u.cost,
       }))
-      .sort((a, b) => b.input + b.output - (a.input + a.output));
+      .sort((a, b) => b.total - a.total);
 
     const { currentStreak, longestStreak } = computeStreaks(
       activeDayKeys,
@@ -568,12 +712,33 @@ export class ActivityStatsStore {
       sessions: sessions.size,
       messages,
       totalTokens,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalCost,
       activeDays,
       currentStreak,
       longestStreak,
       peakHour,
       models: modelList,
     };
+  }
+
+  /**
+   * Display name for a usage entry: prefer the provider-scoped key so
+   * same-id models under different providers stay distinct, then fall back
+   * to the bare model id (v1 data, provider-less records).
+   */
+  private modelNameFor(
+    provider: string | null,
+    modelId: string,
+  ): string | null {
+    if (provider) {
+      const scoped = this.store.modelNames[modelUsageKey(provider, modelId)];
+      if (scoped) return scoped;
+    }
+    return this.store.modelNames[modelId] ?? null;
   }
 
   // ─── Persistence ───────────────────────────────────────────────────────────

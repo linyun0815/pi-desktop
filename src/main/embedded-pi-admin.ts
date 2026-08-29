@@ -3,6 +3,7 @@ import {
   EMBEDDED_AGENT_PROTOCOL_VERSION,
   parseAdminHelperToParent,
 } from "../shared/embedded-agent-protocol";
+import { parseDiscoveredModelsPayload } from "../shared/model-discovery";
 import { appLog } from "./app-log";
 import { getPiAgentDir } from "./pi-paths";
 import { FORCE_KILL_TIMEOUT_MS, killProcessTree } from "./process-tree";
@@ -24,6 +25,7 @@ import { resolveEmbeddedWorkerPath } from "./pi-sdk-manager";
 
 const ADMIN_INIT_TIMEOUT_MS = 30_000;
 const DEFAULT_ADMIN_TIMEOUT_MS = 60_000;
+const DISCOVERY_TIMEOUT_MS = 30_000;
 
 export interface AdminPackageResult {
   success: boolean;
@@ -267,6 +269,27 @@ export class EmbeddedPiAdminManager {
       "tool_availability",
     )) as { npm?: boolean; git?: boolean } | undefined;
     return { npm: data?.npm === true, git: data?.git === true };
+  }
+
+  /**
+   * Discover a provider's model list by having the helper load the TEMPORARY
+   * models config at `configPath` and call the provider's /models endpoint.
+   * The config file (and any draft key inside it) never crosses the wire —
+   * only the path and provider id do. Resolves to bare { id, name? } rows.
+   */
+  async discoverModels(
+    configPath: string,
+    providerId: string,
+  ): Promise<Array<{ id: string; name?: string }>> {
+    await this.ensureStarted();
+    const data = (await this.request(
+      { kind: "adminDiscoverModels", configPath, providerId },
+      "model_discovery",
+      DISCOVERY_TIMEOUT_MS,
+    )) as { models?: unknown } | undefined;
+    // Validate the payload here too: the helper's data is untrusted until
+    // narrowed, and credentials must not be able to hide inside it.
+    return parseDiscoveredModelsPayload(data);
   }
 
   /** Stop the helper gracefully; used on app quit. */

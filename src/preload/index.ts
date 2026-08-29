@@ -28,6 +28,10 @@ import type {
   SessionLineageRecord,
   ModelsConfig,
   ModelsReadResult,
+  ModelCatalogLookupRequest,
+  ModelCatalogLookupResult,
+  ModelDiscoveryRequest,
+  ModelDiscoveryResult,
   CouncilDetectResult,
   CouncilRunRequest,
   CouncilRunResult,
@@ -201,6 +205,10 @@ interface PiDesktopAPI {
   models: {
     read(): Promise<ModelsReadResult>
     write(config: ModelsConfig): Promise<{ success: boolean; error?: string }>
+    /** Look one model up in the models.dev catalog (metadata/price suggestions). */
+    catalogLookup(request: ModelCatalogLookupRequest): Promise<ModelCatalogLookupResult>
+    /** Discover a provider's model list via its /models endpoint (draft key never persisted). */
+    discover(request: ModelDiscoveryRequest): Promise<ModelDiscoveryResult>
   }
 
   council: {
@@ -455,6 +463,10 @@ const api: PiDesktopAPI = {
   models: {
     read: () => ipcRenderer.invoke(IPC_CHANNELS.MODELS_READ),
     write: (config) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_WRITE, config),
+    catalogLookup: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.MODELS_CATALOG_LOOKUP, request),
+    discover: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.MODELS_DISCOVER, request),
   },
 
   council: {

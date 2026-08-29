@@ -328,3 +328,72 @@ test("toTransferable JSON-rounds class-shaped values and rejects cycles", () => 
   cyclic.self = cyclic;
   assert.equal(toTransferable(cyclic), null);
 });
+
+test("adminDiscoverModels round-trips with path and provider only", () => {
+  const message = {
+    kind: "adminDiscoverModels",
+    id: "d1",
+    configPath: "/tmp/pi-desktop-models-x/models.json",
+    providerId: "my-provider",
+  };
+  const parsed = parseParentToAdminHelper(message);
+  assert.deepEqual(parsed, message);
+  // No credentials field is part of the message contract: an injected one is
+  // dropped by the validator (it only forwards known fields).
+  const withKey = parseParentToAdminHelper({
+    ...message,
+    apiKey: "sk-leaky",
+  }) as Record<string, unknown> | null;
+  assert.ok(withKey);
+  assert.equal("apiKey" in withKey, false);
+});
+
+test("adminDiscoverModels rejects missing path/provider and bad types", () => {
+  assert.equal(
+    parseParentToAdminHelper({ kind: "adminDiscoverModels", id: "d2" }),
+    null,
+  );
+  assert.equal(
+    parseParentToAdminHelper({
+      kind: "adminDiscoverModels",
+      id: "d2",
+      configPath: "  ",
+      providerId: "p",
+    }),
+    null,
+  );
+  assert.equal(
+    parseParentToAdminHelper({
+      kind: "adminDiscoverModels",
+      id: "d2",
+      configPath: "/tmp/models.json",
+      providerId: 42,
+    }),
+    null,
+  );
+  assert.equal(parseParentToAdminHelper({ kind: "adminDiscoverModels" }), null);
+});
+
+test("admin discover response payload is narrowed to id/name rows", () => {
+  // The adminResponse envelope itself is generic (data: unknown); narrowing
+  // happens via parseDiscoveredModelsPayload, which drops any extra fields.
+  const envelope = parseAdminHelperToParent({
+    kind: "adminResponse",
+    id: "d3",
+    command: "model_discovery",
+    success: true,
+    data: { models: [{ id: "m1", name: "Model One" }] },
+  });
+  assert.ok(envelope && envelope.kind === "adminResponse");
+  assert.equal(envelope.success, true);
+
+  assert.equal(
+    parseAdminHelperToParent({
+      kind: "adminResponse",
+      id: "d3",
+      command: "model_discovery",
+      success: "yes",
+    }),
+    null,
+  );
+});

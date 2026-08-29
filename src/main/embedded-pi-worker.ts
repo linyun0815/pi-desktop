@@ -31,6 +31,16 @@ import {
   parseParentToHelper,
   toTransferable,
 } from "../shared/embedded-agent-protocol";
+import {
+  DISCOVERY_MAX_BODY_BYTES,
+  buildDiscoveryQuery,
+  buildDiscoveryRequestHeaders,
+  buildModelsEndpoint,
+  fetchWithAuthRedirectGuard,
+  isDiscoverableApi,
+  parseModelsListResponse,
+} from "../shared/model-discovery";
+import { readFile } from "node:fs/promises";
 import { createDeferredPrompt } from "./prompt-acceptance";
 
 type ParentPort = {
@@ -1146,8 +1156,8 @@ let adminState: AdminState | null = null;
 
 function toolAvailable(command: string, args: string[]): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { spawnSync } =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       require("node:child_process") as typeof import("node:child_process");
     const probe = spawnSync(command, args, {
       encoding: "utf-8",
@@ -1276,6 +1286,10 @@ async function handleAdminMessage(value: unknown): Promise<void> {
         result = { npm: npmAvailable(), git: gitAvailable() };
         break;
       }
+      case "adminDiscoverModels": {
+        result = await discoverProviderModels(msg.configPath, msg.providerId);
+        break;
+      }
       default:
         return;
     }
@@ -1301,4 +1315,105 @@ async function ensurePackageManager(st: AdminState): Promise<unknown> {
     settingsManager,
   });
   return st.packageManager;
+}
+
+/**
+ * Discover one provider's model list over its /models endpoint (admin mode).
+ *
+ * The provider is loaded from the GUI-owned TEMPORARY models config at
+ * `configPath`, so Pi's own models.json value resolution (`$ENV`/`!cmd`
+ * references), auth.json, and environment all apply without the desktop ever
+ * seeing a resolved credential: the draft API key travels via the temp file,
+ * never the protocol, and the resolved key is used only to build request
+ * headers. Errors and responses carry model ids/names only — no keys, no
+ * response bodies.
+ */
+async function discoverProviderModels(
+  configPath: string,
+  providerId: string,
+): Promise<{ models: Array<{ id: string; name?: string }> }> {
+  const Sdk = await loadSdk();
+  const st = adminState!;
+  const runtime = await Sdk.ModelRuntime.create({
+    authPath: join(st.agentDir, "auth.json"),
+    modelsPath: configPath,
+    // allowModelNetwork defaults to false: discovery performs its own single
+    // HTTP call and no catalog refresh happens at create time.
+  });
+
+  // The composed Provider carries baseUrl/headers but not the API family, so
+  // the api comes from the temp config we wrote ourselves.
+  const rawConfig = JSON.parse(await readFile(configPath, "utf-8")) as {
+    providers?: Record<string, { api?: unknown; headers?: unknown }>;
+  };
+  const providerEntry = rawConfig.providers?.[providerId];
+  const api = providerEntry?.api;
+  if (!providerEntry || typeof api !== "string" || !isDiscoverableApi(api)) {
+    throw new Error(
+      `不支持自动发现：API 类型“${typeof api === "string" ? api : "未知"}”不在支持列表中`,
+    );
+  }
+
+  const provider = runtime.getProvider(providerId);
+  const baseUrl = provider?.baseUrl ?? "";
+  const endpoint = buildModelsEndpoint(baseUrl, api);
+  if (!endpoint) {
+    throw new Error("提供商 Base URL 缺失或不是有效的 http(s) 地址");
+  }
+
+  // Resolve the credential through Pi (auth.json + env + models.json value
+  // resolution). An unresolvable key is not fatal: some providers are local
+  // or keyless — the request just goes out without auth headers.
+  let apiKey: string | null = null;
+  try {
+    const auth = await runtime.getAuth(providerId);
+    if (auth?.auth?.apiKey) apiKey = auth.auth.apiKey;
+  } catch {
+    // Unconfigured provider — proceed without auth.
+  }
+
+  const extraHeaders: Record<string, string> = {};
+  const configHeaders = providerEntry.headers;
+  if (typeof configHeaders === "object" && configHeaders !== null) {
+    for (const [key, value] of Object.entries(
+      configHeaders as Record<string, unknown>,
+    )) {
+      if (typeof value === "string") extraHeaders[key] = value;
+    }
+  }
+  const headers = {
+    ...extraHeaders,
+    ...buildDiscoveryRequestHeaders(api, apiKey),
+  };
+  const query = buildDiscoveryQuery(api);
+  for (const [key, value] of Object.entries(query)) {
+    endpoint.searchParams.set(key, value);
+  }
+
+  const response = await fetchWithAuthRedirectGuard(
+    fetch,
+    endpoint.toString(),
+    headers,
+    { timeoutMs: 25_000 },
+  );
+  if (!response.ok) {
+    throw new Error(`模型列表请求失败：HTTP ${response.status}`);
+  }
+  const declaredLength = Number(response.headers.get("content-length") ?? "0");
+  if (declaredLength > DISCOVERY_MAX_BODY_BYTES) {
+    throw new Error("模型列表响应过大");
+  }
+  const text = await response.text();
+  if (text.length > DISCOVERY_MAX_BODY_BYTES) {
+    throw new Error("模型列表响应过大");
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("模型列表响应不是有效 JSON");
+  }
+  const parsed = parseModelsListResponse(payload);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return { models: parsed.models };
 }

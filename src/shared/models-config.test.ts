@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  normalizeModelCost,
   validateModelsConfig,
   mergeModelsConfig,
   normalizeModelsConfigForPi,
@@ -181,4 +182,155 @@ test('withImageInput keeps text when disabling on a text-only model', () => {
 test('withImageInput adds missing text for an image-only input', () => {
   assert.deepEqual(withImageInput(['image'], true), ['text', 'image'])
   assert.deepEqual(withImageInput(['image'], false), ['text'])
+})
+
+test('validateModelsConfig accepts full and partial costs, rejects invalid ones', () => {
+  assert.deepEqual(
+    validateModelsConfig({
+      providers: { p: { models: [{ id: 'm', cost: { input: 1, output: 2 } as never }] } },
+    }),
+    [],
+  )
+  assert.deepEqual(
+    validateModelsConfig({
+      providers: {
+        p: {
+          models: [
+            {
+              id: 'm',
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                tiers: [{ inputTokensAbove: 200000, input: 2, output: 4 } as never],
+              },
+            },
+          ],
+        },
+      },
+    }),
+    [],
+  )
+  const errs = validateModelsConfig({
+    providers: {
+      p: {
+        models: [
+          {
+            id: 'm',
+            cost: {
+              input: -1,
+              output: Number.NaN,
+              cacheRead: 'x',
+              tiers: 'nope',
+            } as never,
+          },
+          {
+            id: 'm2',
+            cost: { tiers: [{ inputTokensAbove: -5 }] } as never,
+          },
+          { id: 'm3', cost: 'cheap' as never },
+        ],
+      },
+    },
+  })
+  assert.ok(errs.some((e) => e.includes('cost.input')))
+  assert.ok(errs.some((e) => e.includes('cost.output')))
+  assert.ok(errs.some((e) => e.includes('cost.cacheRead')))
+  assert.ok(errs.some((e) => e.includes('cost.tiers 必须是数组')))
+  assert.ok(errs.some((e) => e.includes('tiers[0].inputTokensAbove')))
+  assert.ok(errs.some((e) => e.includes('cost 必须是对象')))
+})
+
+test('merge keeps the original cost when the edit has none', () => {
+  const original: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 } }] } },
+  }
+  const edited: ModelsConfig = { providers: { p: { models: [{ id: 'm', name: 'Renamed' }] } } }
+  const merged = mergeModelsConfig(original, edited)
+  assert.deepEqual(merged.providers.p.models![0].cost, {
+    input: 1,
+    output: 2,
+    cacheRead: 0.5,
+    cacheWrite: 0,
+  })
+  assert.equal(merged.providers.p.models![0].name, 'Renamed')
+})
+
+test('merge replaces a non-empty cost and normalizes missing rates to zero', () => {
+  const original: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 } }] } },
+  }
+  const edited: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: { input: 3, output: 4 } as never }] } },
+  }
+  const merged = mergeModelsConfig(original, edited)
+  assert.deepEqual(merged.providers.p.models![0].cost, {
+    input: 3,
+    output: 4,
+    cacheRead: 0,
+    cacheWrite: 0,
+  })
+})
+
+test('merge removes cost when the edited cost object is empty', () => {
+  const original: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }] } },
+  }
+  const edited: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: {} as never }] } },
+  }
+  const merged = mergeModelsConfig(original, edited)
+  assert.equal(merged.providers.p.models![0].cost, undefined)
+})
+
+test('merge preserves unknown per-model and cost fields', () => {
+  const original = {
+    providers: {
+      p: {
+        models: [
+          {
+            id: 'm',
+            compat: { supportsUsageInStreaming: true },
+            cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, tiers: [{ inputTokensAbove: 1, input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 }], providerNote: 'keepme' },
+          },
+        ],
+      },
+    },
+  } as never as ModelsConfig
+  const edited: ModelsConfig = {
+    providers: { p: { models: [{ id: 'm', cost: { input: 9, output: 9, cacheRead: 0, cacheWrite: 0 } }] } },
+  }
+  const merged = mergeModelsConfig(original, edited)
+  const model = merged.providers.p.models![0]
+  assert.deepEqual(model.compat, { supportsUsageInStreaming: true })
+  // Replacement layers the new base rates over the original cost: existing
+  // tiers and unknown cost extras survive the edit.
+  assert.deepEqual(model.cost, {
+    input: 9,
+    output: 9,
+    cacheRead: 0,
+    cacheWrite: 0,
+    tiers: [{ inputTokensAbove: 1, input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 }],
+    providerNote: 'keepme',
+  })
+})
+
+test('normalizeModelCost fills missing rates with zero and keeps tiers', () => {
+  assert.deepEqual(normalizeModelCost({ input: 1, output: 2 } as never), {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+  })
+  const withTiers = normalizeModelCost({
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    tiers: [{ inputTokensAbove: 5, input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 }],
+  })
+  assert.equal(withTiers?.tiers?.length, 1)
+  assert.equal(normalizeModelCost(null as never), null)
+  assert.equal(normalizeModelCost([1] as never), null)
 })

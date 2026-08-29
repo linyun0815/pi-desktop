@@ -28,7 +28,7 @@ import type {
 import { THINKING_LEVELS, type ThinkingLevel } from "./model-thinking";
 
 /** Bump on any wire-incompatible change; the parent refuses mismatched helpers. */
-export const EMBEDDED_AGENT_PROTOCOL_VERSION = 1;
+export const EMBEDDED_AGENT_PROTOCOL_VERSION = 2;
 
 /** How a helper binds its AgentSessionRuntime's session manager at init. */
 export type SessionTarget =
@@ -372,6 +372,19 @@ export interface AdminNpmAvailableMessage {
     id: string;
 }
 
+/**
+ * Discover one provider's model list over its /models endpoint. `configPath`
+ * points at a GUI-owned TEMPORARY models.json holding the merged provider
+ * draft (the helper reads the file itself; an API key never crosses the wire).
+ * The response data carries only `{ models: Array<{ id, name? }> }`.
+ */
+export interface AdminDiscoverModelsMessage {
+    kind: "adminDiscoverModels";
+    id: string;
+    configPath: string;
+    providerId: string;
+}
+
 export interface AdminShutdownMessage {
     kind: "adminShutdown";
     id: string;
@@ -384,6 +397,7 @@ export type ParentToAdminHelperMessage =
     | AdminPackageUpdateMessage
     | AdminPackagesConfiguredMessage
     | AdminNpmAvailableMessage
+    | AdminDiscoverModelsMessage
     | AdminShutdownMessage;
 
 export interface AdminReadyMessage {
@@ -759,6 +773,7 @@ const ADMIN_PARENT_KINDS = [
     "adminPackageUpdate",
     "adminPackagesConfigured",
     "adminNpmAvailable",
+    "adminDiscoverModels",
     "adminShutdown",
 ] as const;
 
@@ -789,6 +804,21 @@ export function parseParentToAdminHelper(
         case "adminShutdown":
             if (!hasId) return null;
             return { kind, id };
+        case "adminDiscoverModels":
+            if (
+                !hasId ||
+                !isString(value.configPath) ||
+                value.configPath.trim().length === 0 ||
+                !isString(value.providerId) ||
+                value.providerId.trim().length === 0
+            )
+                return null;
+            return {
+                kind,
+                id,
+                configPath: value.configPath,
+                providerId: value.providerId,
+            };
         case "adminPackageInstall":
         case "adminPackageRemove":
             if (!hasId || !isString(value.source)) return null;
