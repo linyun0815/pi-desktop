@@ -7,8 +7,6 @@ import type {
   SessionDeleteResult,
   ArchivedSessionsMap,
   AppSettings,
-  AuthProvidersResult,
-  AuthLoginResult,
   Workspace,
   WorkspaceTrustStatus,
   WorkspaceTabOptions,
@@ -71,7 +69,6 @@ import type {
   GitConveyorPullRequestResult,
 } from '../shared/ipc-contracts'
 import type { ThemeFile } from '../shared/theme/theme-file'
-import type { AuthEventPayload, AuthPromptPayload } from '../shared/embedded-agent-protocol'
 import { IPC_CHANNELS } from '../shared/ipc-contracts'
 
 // ─── Type Definitions for the Exposed API ────────────────────────────────────
@@ -85,20 +82,12 @@ interface PiDesktopAPI {
     getStatus(): Promise<PiStatus>
   }
 
-  // Provider credentials (embedded SDK auth)
-  auth: {
-    listProviders(): Promise<AuthProvidersResult>
-    login(providerId: string): Promise<AuthLoginResult>
-    logout(providerId: string): Promise<AuthLoginResult>
-    answerPrompt(loginId: string, value: string): Promise<{ ok: boolean }>
-    cancelLogin(loginId: string): Promise<{ ok: boolean }>
-    onAuthPrompt(callback: (event: { loginId: string; prompt: AuthPromptPayload }) => void): () => void
-    onAuthNotify(callback: (event: { loginId: string; event: AuthEventPayload }) => void): () => void
-  }
-
   // Pi commands
   commands: {
-    prompt(message: string, options?: { images?: PromptImage[]; streamingBehavior?: string }): Promise<unknown>
+    prompt(
+      message: string,
+      options?: { images?: PromptImage[]; streamingBehavior?: 'steer' | 'followUp' },
+    ): Promise<unknown>
     steer(message: string, images?: PromptImage[]): Promise<unknown>
     followUp(message: string): Promise<unknown>
     abort(): Promise<unknown>
@@ -364,29 +353,6 @@ const api: PiDesktopAPI = {
     stop: () => ipcRenderer.invoke(IPC_CHANNELS.PI_STOP),
     restart: (options?: PiStartOptions) => ipcRenderer.invoke(IPC_CHANNELS.PI_RESTART, options),
     getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.PI_STATUS),
-  },
-
-  auth: {
-    listProviders: () => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LIST_PROVIDERS),
-    login: (providerId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGIN, providerId),
-    logout: (providerId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGOUT, providerId),
-    answerPrompt: (loginId: string, value: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.AUTH_PROMPT_RESPONSE, loginId, value),
-    cancelLogin: (loginId: string) => ipcRenderer.invoke(IPC_CHANNELS.AUTH_CANCEL_LOGIN, loginId),
-    onAuthPrompt: (callback: (event: { loginId: string; prompt: AuthPromptPayload }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: { loginId: string; prompt: AuthPromptPayload }) => callback(data)
-      ipcRenderer.on(IPC_CHANNELS.EVENT_AUTH_PROMPT, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.EVENT_AUTH_PROMPT, handler)
-      }
-    },
-    onAuthNotify: (callback: (event: { loginId: string; event: AuthEventPayload }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: { loginId: string; event: AuthEventPayload }) => callback(data)
-      ipcRenderer.on(IPC_CHANNELS.EVENT_AUTH_NOTIFY, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.EVENT_AUTH_NOTIFY, handler)
-      }
-    },
   },
 
   commands: {

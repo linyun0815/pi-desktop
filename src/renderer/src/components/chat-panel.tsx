@@ -284,7 +284,7 @@ export function ChatPanel(): React.JSX.Element {
                             ? `正在启动 ${engineLabel} 代理…`
                             : piStatus === "error"
                               ? `${engineLabel} 启动失败，请检查设置。`
-                              : `选择一个项目，发送消息后 ${engineLabel} 将启动。`}
+                              : `选择一个项目，${engineLabel} 会自动启动；就绪后先选择模型。`}
                       </p>
                     </div>
                     <div className="w-full max-w-3xl">

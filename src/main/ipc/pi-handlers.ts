@@ -10,6 +10,51 @@ import {
 import { loadAppSettings } from "./settings";
 import type { IpcContext } from "./context";
 
+/** Structural guard for one image block crossing the prompt IPC. */
+function isPromptImage(value: unknown): value is PromptImage {
+  if (!isObject(value)) return false;
+  return (
+    value.type === "image" && isString(value.mimeType) && isString(value.data)
+  );
+}
+
+/**
+ * Validate prompt options strictly: reject malformed images and unknown
+ * streaming behaviors instead of casting and letting the helper silently
+ * drop them. Returns the narrowed options or throws with the offending path.
+ */
+function validatePromptOptions(options: unknown): {
+  images?: PromptImage[];
+  streamingBehavior?: "steer" | "followUp";
+} {
+  if (options === undefined || options === null) return {};
+  if (!isObject(options)) throw new Error("options must be an object");
+  const out: { images?: PromptImage[]; streamingBehavior?: "steer" | "followUp" } = {};
+  if (options.images !== undefined) {
+    if (!Array.isArray(options.images))
+      throw new Error("options.images must be an array");
+    options.images.forEach((image, index) => {
+      if (!isPromptImage(image))
+        throw new Error(
+          `options.images[${index}] must be an image block (type/mimeType/data)`,
+        );
+    });
+    out.images = options.images as PromptImage[];
+  }
+  if (options.streamingBehavior !== undefined) {
+    if (
+      options.streamingBehavior !== "steer" &&
+      options.streamingBehavior !== "followUp"
+    ) {
+      throw new Error(
+        'options.streamingBehavior must be "steer" or "followUp"',
+      );
+    }
+    out.streamingBehavior = options.streamingBehavior;
+  }
+  return out;
+}
+
 export function registerPiHandlers(ctx: IpcContext): void {
   const { workspaceManager, getActivePi } = ctx;
 
@@ -102,19 +147,7 @@ export function registerPiHandlers(ctx: IpcContext): void {
     IPC_CHANNELS.PI_PROMPT,
     async (_event, message: unknown, options?: unknown) => {
       if (!isString(message)) throw new Error("message must be a string");
-      const opts: {
-        images?: PromptImage[];
-        streamingBehavior?: "steer" | "followUp";
-      } = {};
-      if (isObject(options)) {
-        if (Array.isArray(options.images)) opts.images = options.images as PromptImage[];
-        if (
-          options.streamingBehavior === "steer" ||
-          options.streamingBehavior === "followUp"
-        ) {
-          opts.streamingBehavior = options.streamingBehavior;
-        }
-      }
+      const opts = validatePromptOptions(options);
       return getActivePi().prompt(message, opts);
     },
   );
@@ -123,9 +156,18 @@ export function registerPiHandlers(ctx: IpcContext): void {
     IPC_CHANNELS.PI_STEER,
     async (_event, message: unknown, images?: unknown) => {
       if (!isString(message)) throw new Error("message must be a string");
-      const promptImages = Array.isArray(images) && images.length > 0
-        ? (images as PromptImage[])
-        : undefined;
+      let promptImages: PromptImage[] | undefined;
+      if (images !== undefined) {
+        if (!Array.isArray(images))
+          throw new Error("images must be an array");
+        images.forEach((image, index) => {
+          if (!isPromptImage(image))
+            throw new Error(
+              `images[${index}] must be an image block (type/mimeType/data)`,
+            );
+        });
+        promptImages = images as PromptImage[];
+      }
       return getActivePi().steer(message, promptImages);
     },
   );

@@ -9,13 +9,14 @@ import {
   Layers,
   GitCompare,
   AlertTriangle,
-  Settings as SettingsIcon,
+  RefreshCw,
   Play,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import piLogo from "../assets/pi-logo.svg";
 import { formatGitStatus } from "./review-rail";
 import { StatsPanel } from "./stats-panel";
+import { ModelSelector } from "./model-selector";
 import type {
   GitFileStatus,
   SessionListItem,
@@ -280,9 +281,9 @@ export function HomeInfoSummary({
 function PiErrorBanner(): React.JSX.Element | null {
   const piStatus = useAppStore((s) => s.piStatus);
   const piError = useAppStore((s) => s.piError);
+  const ensurePiStarted = useAppStore((s) => s.ensurePiStarted);
   // The desktop embeds Pi; the label is a constant.
   const engineLabel: string = DEFAULT_AGENT_ENGINE_LABEL;
-  const setCurrentView = useAppStore((s) => s.setCurrentView);
   if (piStatus !== "error" || !piError) return null;
   return (
     <div className="mb-6 flex items-start gap-3 rounded-lg border border-error-bg bg-error-bg px-4 py-3 text-sm text-error">
@@ -290,16 +291,13 @@ function PiErrorBanner(): React.JSX.Element | null {
       <div className="flex-1">
         <div className="font-medium">无法启动 {engineLabel}</div>
         <div className="mt-0.5 text-error/80">{piError}</div>
-        <div className="mt-1 text-xs text-error/70">
-          请确认已安装 {engineLabel}，且路径配置正确。
-        </div>
       </div>
       <button
-        onClick={() => setCurrentView("settings")}
+        onClick={() => void ensurePiStarted()}
         className="flex shrink-0 items-center gap-1.5 rounded-md bg-error/25 px-2.5 py-1 text-xs text-error hover:bg-error/40"
       >
-        <SettingsIcon size={12} />
-        设置
+        <RefreshCw size={12} />
+        重试
       </button>
     </div>
   );
@@ -415,6 +413,13 @@ function HomeScreenInfo(): React.JSX.Element {
           <p className="mt-1 text-sm text-dim">
             打开工作区，或继续上次的工作。
           </p>
+        </div>
+
+        {/* Model picker: reuses the status-bar picker's searchable body. With
+            no project yet it says so; while Pi boots it shows the startup
+            state; once running it lists and persists the default model. */}
+        <div className="mb-6">
+          <ModelSelector variant="home" />
         </div>
 
         <div className="mb-6 grid gap-3 sm:grid-cols-3">

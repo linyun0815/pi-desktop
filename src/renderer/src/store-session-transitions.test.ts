@@ -292,6 +292,14 @@ before(async () => {
 
 // A turn in flight: streaming flag set, partial buffers filled, and a queue
 // update already applied — exactly the state a session change has to tear down.
+// One macrotask — enough for fire-and-forget background starts to settle
+// without the test awaiting them directly.
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// A turn in flight: streaming flag set, partial buffers filled, and a queue
+// update already applied — exactly the state a session change has to tear down.
 function enterStreamingState(): void {
   useAppStore.setState({
     isStreaming: true,
@@ -947,19 +955,18 @@ test("openFolderAsWorkspace switches when the dropped folder is an existing othe
     "previous workspace chat must clear on switch",
   );
   assert.equal(useAppStore.getState().currentView, "chat");
-  assert.equal(
-    useAppStore.getState().piStatus,
-    "stopped",
-    "an idle target shows the empty view instantly — no process is spawned",
-  );
+  // The switch backgrounds a single-flighted start for the now-active
+  // workspace; give it a tick to land.
+  await tick();
   assert.equal(
     calls.includes("pi.start"),
-    false,
-    "navigation must not spawn a process",
+    true,
+    "the activated workspace's Pi starts up in the background",
   );
+  assert.equal(useAppStore.getState().piStatus, "running");
 });
 
-test("activating an idle workspace shows the empty view without starting Pi", async () => {
+test("activating an idle workspace shows the empty view and starts Pi in the background", async () => {
   workspaceListResult = [WORKSPACE_ONE, WORKSPACE_TWO];
   activeWorkspaceResult = WORKSPACE_ONE;
   useAppStore.setState({
@@ -973,19 +980,22 @@ test("activating an idle workspace shows the empty view without starting Pi", as
 
   assert.equal(ok, true);
   const state = useAppStore.getState();
-  assert.equal(
-    calls.includes("pi.start"),
-    false,
-    "selection must stay process-free",
-  );
   assert.equal(state.activeWorkspace?.id, WORKSPACE_TWO.id);
   assert.deepEqual(state.messages, []);
   assert.equal(state.sessionLoading, false, "no spinner without a process");
   assert.equal(state.sessionState, null);
-  assert.equal(state.piStatus, "stopped");
+  // With the instantaneous stubs the background start may already have
+  // landed by the time the switch resolves; it must land either way.
+  await tick();
+  assert.equal(
+    calls.includes("pi.start"),
+    true,
+    "selection is process-free in the critical path but boots Pi right after",
+  );
+  assert.equal(useAppStore.getState().piStatus, "running");
 });
 
-test("the first prompt lazy-starts an idle workspace", async () => {
+test("the first prompt meets a runtime already started by activation", async () => {
   workspaceListResult = [WORKSPACE_ONE, WORKSPACE_TWO];
   activeWorkspaceResult = WORKSPACE_ONE;
   useAppStore.setState({
@@ -993,16 +1003,23 @@ test("the first prompt lazy-starts an idle workspace", async () => {
     workspaces: [WORKSPACE_ONE, WORKSPACE_TWO],
   });
   await useAppStore.getState().switchWorkspace(WORKSPACE_TWO.id);
+  await tick();
+  const startsAfterActivation = calls.filter((c) => c === "pi.start").length;
+  assert.equal(startsAfterActivation, 1, "activation started Pi once");
   calls.length = 0;
 
-  await useAppStore.getState().sendPrompt("ship it");
+  const accepted = await useAppStore.getState().sendPrompt("ship it");
 
-  const startAt = calls.indexOf("pi.start");
-  assert.notEqual(startAt, -1, "the first send must spawn the agent");
+  assert.equal(accepted, true);
   assert.equal(
-    calls.findIndex((c) => c.startsWith("prompt:")),
-    startAt + 1,
-    "the prompt goes out only after startup completes",
+    calls.includes("pi.start"),
+    false,
+    "the prompt must not start a second helper",
+  );
+  assert.equal(
+    calls.some((c) => c.startsWith("prompt:")),
+    true,
+    "the prompt goes out to the already-running runtime",
   );
   assert.equal(useAppStore.getState().piStatus, "running");
 });
@@ -1027,11 +1044,10 @@ function runtimeIn(
   };
 }
 
-test("a stopped active runtime reports stopped even with a live sibling", async () => {
+test("a stopped active runtime shows the empty view even with a live sibling", async () => {
   // Two tabs in the same workspace: the one main resolves for prompts is
   // stopped, a background tab is still running. Reading "any runtime" here
-  // reported running, so the first prompt skipped its lazy start and hit a
-  // stopped manager.
+  // reported running and skipped both the empty view and the start.
   workspaceListResult = [WORKSPACE_ONE, WORKSPACE_TWO];
   activeWorkspaceResult = WORKSPACE_ONE;
   useAppStore.setState({
@@ -1058,19 +1074,23 @@ test("a stopped active runtime reports stopped even with a live sibling", async 
   assert.equal(ok, true);
   const state = useAppStore.getState();
   assert.equal(
-    state.piStatus,
-    "stopped",
-    "a background sibling must not mask the stopped active runtime",
-  );
-  assert.equal(
     state.sessionLoading,
     false,
     "nothing hydrates while the active runtime is down",
   );
   assert.equal(calls.includes("getMessages"), false);
+  // The stopped runtime is not masked as live: activation backgrounds a
+  // start for the workspace instead.
+  await tick();
+  assert.equal(
+    calls.includes("pi.start"),
+    true,
+    "the stopped active runtime gets a fresh start",
+  );
+  assert.equal(useAppStore.getState().piStatus, "running");
 });
 
-test("the first prompt lazy-starts a workspace whose active runtime is stopped", async () => {
+test("a prompt waits for the activation start of a workspace whose active runtime is stopped", async () => {
   workspaceListResult = [WORKSPACE_ONE, WORKSPACE_TWO];
   activeWorkspaceResult = WORKSPACE_ONE;
   useAppStore.setState({
@@ -1092,19 +1112,19 @@ test("the first prompt lazy-starts a workspace whose active runtime is stopped",
     },
   });
   await useAppStore.getState().activateWorkspace(WORKSPACE_TWO.id);
-  calls.length = 0;
+  // Fire the prompt while the activation's background start is still settling:
+  // it must ride the same single-flighted start, never a second helper.
+  const accepted = await useAppStore.getState().sendPrompt("ship it");
 
-  await useAppStore.getState().sendPrompt("ship it");
-
-  const startAt = calls.indexOf("pi.start");
-  assert.notEqual(
-    startAt,
-    -1,
-    "the prompt must not be sent into a stopped manager",
+  assert.equal(accepted, true);
+  assert.equal(
+    calls.filter((c) => c === "pi.start").length,
+    1,
+    "exactly one helper for the activation and its first prompt",
   );
   assert.equal(
-    calls.findIndex((c) => c.startsWith("prompt:")),
-    startAt + 1,
+    calls.some((c) => c.startsWith("prompt:")),
+    true,
     "the prompt goes out only after startup completes",
   );
 });

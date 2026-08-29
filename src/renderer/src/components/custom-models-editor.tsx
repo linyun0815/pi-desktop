@@ -1,55 +1,51 @@
 import { useEffect, useState } from "react";
 import { clsx } from "clsx";
-import { Plus, Trash2, Save, RefreshCw, AlertTriangle } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Layers,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { useAppStore } from "../store";
 import { withImageInput } from "../../../shared/models-config";
-import type {
-  ModelsConfig,
-  ProviderConfig,
-  CustomModel,
-} from "../../../shared/models-config";
+import type { CustomModel } from "../../../shared/models-config";
+import {
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from "../../../shared/model-thinking";
+import {
+  API_OPTIONS,
+  configToRows,
+  mapLevelState,
+  resetModelMap,
+  rowsToConfig,
+  validateRows,
+  withMapLevel,
+  type MapLevelState,
+  type ProviderRow,
+} from "./custom-models-editor-helpers";
 
-const API_OPTIONS = [
-  "openai-completions",
-  "openai-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-];
+/**
+ * Custom models editor (~/.pi/agent/models.json).
+ *
+ * Providers render as collapsed cards (name, API, base URL, model count,
+ * delete); each model lays out in aligned rows — required id/name, numeric
+ * windows + capability toggles, then a collapsible per-level thinking map.
+ * All conversion and validation lives in custom-models-editor-helpers.ts and
+ * is unit-tested; this component holds only expand/collapse and visibility
+ * UI state, which never reaches the written file.
+ */
 
-interface ProviderRow {
-  key: string;
-  baseUrl: string;
-  api: string;
-  apiKey: string;
-  compat: ProviderConfig["compat"];
-  models: CustomModel[];
-}
-
-function configToRows(config: ModelsConfig | null): ProviderRow[] {
-  if (!config) return [];
-  return Object.entries(config.providers ?? {}).map(([key, p]) => ({
-    key,
-    baseUrl: typeof p.baseUrl === "string" ? p.baseUrl : "",
-    api: typeof p.api === "string" ? p.api : "",
-    apiKey: typeof p.apiKey === "string" ? p.apiKey : "",
-    compat: p.compat,
-    models: Array.isArray(p.models) ? p.models : [],
-  }));
-}
-
-function rowsToConfig(rows: ProviderRow[]): ModelsConfig {
-  const providers: ModelsConfig["providers"] = {};
-  for (const r of rows) {
-    providers[r.key.trim()] = {
-      ...(r.baseUrl ? { baseUrl: r.baseUrl } : {}),
-      ...(r.api ? { api: r.api } : {}),
-      ...(r.apiKey ? { apiKey: r.apiKey } : {}),
-      ...(r.compat ? { compat: r.compat } : {}),
-      models: r.models,
-    };
-  }
-  return { providers };
-}
+// Expand/collapse keys: provider key + model id survive config reloads, so a
+// save that re-reads the file does not collapse what the user had open.
+const inputClass =
+  "rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none";
 
 export function CustomModelsEditor(): React.JSX.Element {
   const customModels = useAppStore((s) => s.customModels);
@@ -57,10 +53,27 @@ export function CustomModelsEditor(): React.JSX.Element {
   const loadCustomModels = useAppStore((s) => s.loadCustomModels);
   const saveCustomModels = useAppStore((s) => s.saveCustomModels);
   const restartPi = useAppStore((s) => s.restartPi);
+  const requestConfirm = useAppStore((s) => s.requestConfirm);
+  // The active runtime's activity decides the post-save message: main
+  // hot-reloads idle runtimes during the write, a busy one defers to its
+  // next start, so "needs restart" is per-session state, not a blanket rule.
+  const activeRuntime = useAppStore((s) =>
+    s.activeSessionRuntimeId
+      ? s.sessionRuntimes[s.activeSessionRuntimeId]
+      : undefined,
+  );
+  const activeBusy =
+    activeRuntime?.activity === "working" ||
+    activeRuntime?.activity === "needs-approval";
+  const activeRunning = activeRuntime?.status === "running";
 
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [openProviders, setOpenProviders] = useState<Set<string>>(new Set());
+  const [openMaps, setOpenMaps] = useState<Set<string>>(new Set());
+  const [showKeyFor, setShowKeyFor] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadCustomModels();
@@ -88,55 +101,69 @@ export function CustomModelsEditor(): React.JSX.Element {
       },
     ]);
 
-  const removeProvider = (i: number): void =>
-    update(rows.filter((_, idx) => idx !== i));
+  const removeProvider = (index: number): void =>
+    update(rows.filter((_, i) => i !== index));
 
-  const patchProvider = (i: number, patch: Partial<ProviderRow>): void =>
-    update(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const patchProvider = (index: number, patch: Partial<ProviderRow>): void =>
+    update(rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
 
   const patchProviderCompat = (
-    i: number,
-    patch: NonNullable<ProviderConfig["compat"]>,
+    index: number,
+    patch: NonNullable<ProviderRow["compat"]>,
   ): void =>
-    patchProvider(i, { compat: { ...(rows[i].compat ?? {}), ...patch } });
+    patchProvider(index, {
+      compat: { ...(rows[index].compat ?? {}), ...patch },
+    });
 
-  const addModel = (i: number): void =>
-    patchProvider(i, { models: [...rows[i].models, { id: "" }] });
+  const addModel = (providerIndex: number): void =>
+    patchProvider(providerIndex, {
+      models: [...rows[providerIndex].models, { id: "" }],
+    });
 
   const patchModel = (
-    pi: number,
-    mi: number,
+    providerIndex: number,
+    modelIndex: number,
     patch: Partial<CustomModel>,
   ): void =>
-    patchProvider(pi, {
-      models: rows[pi].models.map((m, idx) =>
-        idx === mi ? { ...m, ...patch } : m,
+    patchProvider(providerIndex, {
+      models: rows[providerIndex].models.map((m, i) =>
+        i === modelIndex ? { ...m, ...patch } : m,
       ),
     });
 
-  const removeModel = (pi: number, mi: number): void =>
-    patchProvider(pi, {
-      models: rows[pi].models.filter((_, idx) => idx !== mi),
+  const removeModel = (providerIndex: number, modelIndex: number): void =>
+    patchProvider(providerIndex, {
+      models: rows[providerIndex].models.filter((_, i) => i !== modelIndex),
     });
 
+  const toggleSet = (
+    set: Set<string>,
+    key: string,
+    setter: (next: Set<string>) => void,
+  ): void => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setter(next);
+  };
+
   const handleSave = async (): Promise<void> => {
-    // Duplicate/empty provider keys collapse in object form, so check here.
-    const keys = rows.map((r) => r.key.trim());
-    const localErrors: string[] = [];
-    if (keys.some((k) => k.length === 0))
-      localErrors.push("每个提供商都必须填写非空键名");
-    if (new Set(keys).size !== keys.length)
-      localErrors.push("提供商键名必须唯一");
+    const localErrors = validateRows(rows);
     if (localErrors.length > 0) {
       setErrors(localErrors);
       return;
     }
-    const result = await saveCustomModels(rowsToConfig(rows));
-    if (result.ok) {
-      setErrors([]);
-      setSaved(true);
-    } else {
-      setErrors(result.errors ?? ["保存失败"]);
+    setSaving(true);
+    try {
+      const result = await saveCustomModels(rowsToConfig(rows));
+      if (result.ok) {
+        setErrors([]);
+        setSaved(true);
+      } else {
+        setErrors(result.errors ?? ["保存失败"]);
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -158,173 +185,334 @@ export function CustomModelsEditor(): React.JSX.Element {
     );
   }
 
+  const needsRestart = saved && activeRunning && activeBusy;
+
+  const handleRestart = async (): Promise<void> => {
+    if (activeBusy) {
+      const confirmed = await requestConfirm({
+        title: "重启 Pi？",
+        message:
+          "Pi 正在此会话中工作。重启会停止当前回合：已写入会话的内容保留，其余响应被丢弃。",
+        confirmLabel: "仍要重启",
+        cancelLabel: "继续工作",
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+    await restartPi();
+  };
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-dim">
         <code>~/.pi/agent/models.json</code> 中的自定义提供商和模型。Pi
-        重启后生效。
-      </p>
-      <p className="text-xs text-faint">
-        提示：导入的模型可能没有设置能力标记。如果模型支持思考，请勾选{" "}
-        <span className="text-muted">reasoning</span>；如果支持图像输入，请勾选{" "}
-        <span className="text-muted">vision</span>。重启 Pi 后生效。
+        重启后生效；未在下方暴露的字段（compat、headers
+        等）在保存时原样保留。
       </p>
 
-      {rows.map((row, pi) => (
-        <div key={pi} className="rounded-md border border-border p-3">
-          <div className="flex items-center gap-2">
-            <input
-              value={row.key}
-              onChange={(e) => patchProvider(pi, { key: e.target.value })}
-              placeholder="提供商键名（例如 ollama）"
-              className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
-            />
-            <button
-              onClick={() => removeProvider(pi)}
-              className="rounded p-1 text-dim hover:bg-surface-hover hover:text-error"
-              title="移除提供商"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <input
-              value={row.baseUrl}
-              onChange={(e) => patchProvider(pi, { baseUrl: e.target.value })}
-              placeholder="baseUrl"
-              className="rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
-            />
-            <select
-              value={row.api}
-              onChange={(e) => patchProvider(pi, { api: e.target.value })}
-              className="rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
-            >
-              {API_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="mt-2 flex items-center gap-2 text-[11px] text-dim">
-            <input
-              type="checkbox"
-              checked={row.compat?.supportsReasoningEffort ?? false}
-              onChange={(e) =>
-                patchProviderCompat(pi, {
-                  supportsReasoningEffort: e.target.checked,
-                })
-              }
-              className="accent-accent"
-            />
-            支持思考强度
-          </label>
-          <input
-            value={row.apiKey}
-            onChange={(e) => patchProvider(pi, { apiKey: e.target.value })}
-            placeholder="apiKey — 直接值、$ENV_VAR 或 !shell-command"
-            className="mt-2 w-full rounded border border-border-strong bg-surface px-2 py-1 text-sm text-primary focus:border-focus focus:outline-none"
-          />
-
-          <div className="mt-3 space-y-2">
-            {row.models.map((model, mi) => (
-              <div
-                key={mi}
-                className="rounded border border-border bg-surface/50 p-2"
+      {rows.map((row, pi) => {
+        const providerKey = row.key.trim() || `#${pi + 1}`;
+        const open = openProviders.has(providerKey);
+        return (
+          <div
+            key={pi}
+            className="rounded-md border border-border bg-surface/50"
+          >
+            {/* Provider header: identity at a glance + delete, click to expand. */}
+            <div className="flex items-center gap-2 px-3 py-2">
+              <button
+                type="button"
+                onClick={() =>
+                  toggleSet(openProviders, providerKey, setOpenProviders)
+                }
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                aria-expanded={open}
               >
-                <div className="flex items-center gap-2">
+                <ChevronDown
+                  size={14}
+                  className={clsx(
+                    "shrink-0 text-dim transition-transform",
+                    !open && "-rotate-90",
+                  )}
+                />
+                <Layers size={14} className="shrink-0 text-muted" />
+                <span className="min-w-0 truncate text-sm font-medium text-primary">
+                  {row.key.trim() || "未命名提供商"}
+                </span>
+                <span className="shrink-0 rounded bg-card px-1.5 py-0.5 text-[10px] text-muted">
+                  {row.models.length} 个模型
+                </span>
+                <span className="hidden shrink-0 truncate text-xs text-faint sm:inline">
+                  {row.baseUrl}
+                </span>
+              </button>
+              <IconButton
+                onClick={() => removeProvider(pi)}
+                title="移除提供商"
+                danger
+              >
+                <Trash2 size={14} />
+              </IconButton>
+            </div>
+
+            {open && (
+              <div className="space-y-3 border-t border-border px-3 py-3">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="grid gap-1">
+                    <span className="text-[11px] text-dim">提供商键名</span>
+                    <input
+                      value={row.key}
+                      onChange={(e) =>
+                        patchProvider(pi, { key: e.target.value })
+                      }
+                      placeholder="例如 ollama"
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] text-dim">API</span>
+                    <select
+                      value={row.api}
+                      onChange={(e) =>
+                        patchProvider(pi, { api: e.target.value })
+                      }
+                      className={inputClass}
+                    >
+                      {API_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] text-dim">Base URL</span>
+                    <input
+                      value={row.baseUrl}
+                      onChange={(e) =>
+                        patchProvider(pi, { baseUrl: e.target.value })
+                      }
+                      placeholder="https://…"
+                      className={inputClass}
+                    />
+                  </label>
+                  <div className="grid gap-1">
+                    <span className="text-[11px] text-dim">
+                      API Key（可选）
+                    </span>
+                    <div className="flex gap-1">
+                      <input
+                        type={showKeyFor.has(providerKey) ? "text" : "password"}
+                        value={row.apiKey}
+                        onChange={(e) =>
+                          patchProvider(pi, { apiKey: e.target.value })
+                        }
+                        placeholder="直接值、$ENV_VAR 或 !命令"
+                        autoComplete="off"
+                        spellCheck={false}
+                        className={clsx(inputClass, "min-w-0 flex-1 font-mono")}
+                      />
+                      <IconButton
+                        onClick={() =>
+                          toggleSet(showKeyFor, providerKey, setShowKeyFor)
+                        }
+                        title={
+                          showKeyFor.has(providerKey) ? "隐藏 Key" : "显示 Key"
+                        }
+                      >
+                        {showKeyFor.has(providerKey) ? (
+                          <EyeOff size={13} />
+                        ) : (
+                          <Eye size={13} />
+                        )}
+                      </IconButton>
+                    </div>
+                    <span className="text-[10px] text-faint">
+                      保存后写入 models.json，不会出现在日志或状态中。
+                    </span>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-[11px] text-dim">
                   <input
-                    value={model.id ?? ""}
-                    onChange={(e) => patchModel(pi, mi, { id: e.target.value })}
-                    placeholder="模型 ID（必填）"
-                    className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
-                  />
-                  <input
-                    value={model.name ?? ""}
+                    type="checkbox"
+                    checked={row.compat?.supportsReasoningEffort ?? false}
                     onChange={(e) =>
-                      patchModel(pi, mi, { name: e.target.value })
+                      patchProviderCompat(pi, {
+                        supportsReasoningEffort: e.target.checked,
+                      })
                     }
-                    placeholder="名称"
-                    className="flex-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
+                    className="accent-accent"
                   />
+                  提供商支持思考强度（reasoning effort）
+                </label>
+
+                <div className="space-y-2">
+                  {row.models.map((model, mi) => {
+                    const modelKey = `${providerKey}/${model.id || `#${mi + 1}`}`;
+                    const mapOpen = openMaps.has(modelKey);
+                    return (
+                      <div
+                        key={mi}
+                        className="rounded border border-border bg-surface p-2.5"
+                      >
+                        {/* Row 1: required identity. */}
+                        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                          <input
+                            value={model.id ?? ""}
+                            onChange={(e) =>
+                              patchModel(pi, mi, { id: e.target.value })
+                            }
+                            placeholder="模型 ID（必填）"
+                            className={clsx(inputClass, "text-xs")}
+                          />
+                          <input
+                            value={model.name ?? ""}
+                            onChange={(e) =>
+                              patchModel(pi, mi, { name: e.target.value })
+                            }
+                            placeholder="显示名称"
+                            className={clsx(inputClass, "text-xs")}
+                          />
+                          <IconButton
+                            onClick={() => removeModel(pi, mi)}
+                            title="移除模型"
+                            danger
+                          >
+                            <Trash2 size={12} />
+                          </IconButton>
+                        </div>
+
+                        {/* Row 2: windows + capabilities, fixed-width inputs. */}
+                        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          <label className="flex items-center gap-1.5 text-[11px] text-dim">
+                            上下文窗口
+                            <NumberInput
+                              value={model.contextWindow}
+                              onValue={(v) =>
+                                patchModel(pi, mi, { contextWindow: v })
+                              }
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[11px] text-dim">
+                            最大输出
+                            <NumberInput
+                              value={model.maxTokens}
+                              onValue={(v) =>
+                                patchModel(pi, mi, { maxTokens: v })
+                              }
+                            />
+                          </label>
+                          <label className="flex items-center gap-1 text-[11px] text-dim">
+                            <input
+                              type="checkbox"
+                              checked={model.reasoning ?? false}
+                              onChange={(e) =>
+                                patchModel(pi, mi, {
+                                  reasoning: e.target.checked,
+                                })
+                              }
+                              className="accent-accent"
+                            />
+                            思考
+                          </label>
+                          <label className="flex items-center gap-1 text-[11px] text-dim">
+                            <input
+                              type="checkbox"
+                              checked={model.input?.includes("image") ?? false}
+                              onChange={(e) =>
+                                patchModel(pi, mi, {
+                                  input: withImageInput(
+                                    model.input,
+                                    e.target.checked,
+                                  ),
+                                })
+                              }
+                              className="accent-accent"
+                            />
+                            视觉
+                          </label>
+                        </div>
+
+                        {/* Row 3: collapsible thinking-level map. */}
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleSet(openMaps, modelKey, setOpenMaps)
+                            }
+                            className="flex items-center gap-1 text-[11px] text-muted hover:text-primary"
+                            aria-expanded={mapOpen}
+                          >
+                            <ChevronDown
+                              size={11}
+                              className={clsx(
+                                "transition-transform",
+                                !mapOpen && "-rotate-90",
+                              )}
+                            />
+                            思考级别映射
+                            {model.thinkingLevelMap &&
+                              Object.keys(model.thinkingLevelMap).length > 0 && (
+                                <span className="rounded bg-card px-1.5 py-0.5 text-[10px] text-muted">
+                                  {Object.keys(model.thinkingLevelMap).length}{" "}
+                                  项
+                                </span>
+                              )}
+                          </button>
+                          {mapOpen && (
+                            <div className="mt-2 space-y-2 rounded bg-card/60 p-2">
+                              <p className="text-[10px] text-faint">
+                                默认映射使用供应商内置值；不支持
+                                （null）隐藏该级别；自定义值是发送给供应商的实际字符串。xhigh/max
+                                仅在配置为自定义值时才会出现在选择器中。
+                              </p>
+                              {THINKING_LEVELS.map((level) => (
+                                <ThinkingMapRow
+                                  key={level}
+                                  level={level}
+                                  model={model}
+                                  onChange={(state, value) =>
+                                    patchModel(pi, mi, {
+                                      thinkingLevelMap: withMapLevel(
+                                        model.thinkingLevelMap,
+                                        level,
+                                        state,
+                                        value,
+                                      ),
+                                    })
+                                  }
+                                />
+                              ))}
+                              {model.thinkingLevelMap && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    patchModel(pi, mi, resetModelMap(model))
+                                  }
+                                  className="flex items-center gap-1 text-[11px] text-dim hover:text-secondary"
+                                >
+                                  <RotateCcw size={10} /> 全部恢复默认映射
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                   <button
-                    onClick={() => removeModel(pi, mi)}
-                    className="rounded p-1 text-dim hover:bg-surface-hover hover:text-error"
-                    title="移除模型"
+                    onClick={() => addModel(pi)}
+                    className="flex items-center gap-1 text-xs text-muted hover:text-primary"
                   >
-                    <Trash2 size={12} />
+                    <Plus size={12} /> 添加模型
                   </button>
                 </div>
-                <div className="mt-2 grid grid-cols-4 gap-2">
-                  <label className="flex items-center gap-1 text-[11px] text-dim">
-                    上下文
-                    <input
-                      type="number"
-                      value={model.contextWindow ?? ""}
-                      onChange={(e) =>
-                        patchModel(pi, mi, {
-                          contextWindow:
-                            e.target.value === ""
-                              ? undefined
-                              : Number(e.target.value),
-                        })
-                      }
-                      className="w-full rounded border border-border-strong bg-surface px-1 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
-                    />
-                  </label>
-                  <label className="flex items-center gap-1 text-[11px] text-dim">
-                    最大
-                    <input
-                      type="number"
-                      value={model.maxTokens ?? ""}
-                      onChange={(e) =>
-                        patchModel(pi, mi, {
-                          maxTokens:
-                            e.target.value === ""
-                              ? undefined
-                              : Number(e.target.value),
-                        })
-                      }
-                      className="w-full rounded border border-border-strong bg-surface px-1 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
-                    />
-                  </label>
-                  <label className="flex items-center gap-1 text-[11px] text-dim">
-                    <input
-                      type="checkbox"
-                      checked={model.reasoning ?? false}
-                      onChange={(e) =>
-                        patchModel(pi, mi, { reasoning: e.target.checked })
-                      }
-                      className="accent-accent"
-                    />
-                    思考
-                  </label>
-                  <label className="flex items-center gap-1 text-[11px] text-dim">
-                    <input
-                      type="checkbox"
-                      checked={model.input?.includes("image") ?? false}
-                      onChange={(e) =>
-                        patchModel(pi, mi, {
-                          input: withImageInput(model.input, e.target.checked),
-                        })
-                      }
-                      className="accent-accent"
-                    />
-                    视觉
-                  </label>
-                </div>
               </div>
-            ))}
-            <button
-              onClick={() => addModel(pi)}
-              className="flex items-center gap-1 text-xs text-muted hover:text-primary"
-            >
-              <Plus size={12} /> 添加模型
-            </button>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <button
         onClick={addProvider}
@@ -341,27 +529,139 @@ export function CustomModelsEditor(): React.JSX.Element {
         </ul>
       )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
-          onClick={handleSave}
-          className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm text-white hover:bg-accent-hover transition-colors"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm text-white hover:bg-accent-hover transition-colors disabled:opacity-60"
         >
           <Save size={14} />
-          保存 models.json
+          {saving ? "保存中…" : "保存 models.json"}
         </button>
-        {saved && (
+        {saved && !needsRestart && (
+          <span className="flex items-center gap-1.5 text-xs text-success">
+            <RefreshCw size={12} />
+            {activeRunning
+              ? "已保存，空闲会话已应用"
+              : "已保存，Pi 启动时生效"}
+          </span>
+        )}
+        {saved && needsRestart && (
           <button
-            onClick={() => restartPi()}
+            onClick={() => void handleRestart()}
             className={clsx(
               "flex items-center gap-2 rounded-md border border-border-strong px-3 py-2 text-sm",
               "text-secondary hover:bg-surface-hover transition-colors",
             )}
           >
             <RefreshCw size={14} />
-            已保存，重启 Pi 后生效
+            已保存 — 当前会话忙碌，重启后生效
           </button>
         )}
       </div>
     </div>
+  );
+}
+
+/** One level's three-state editor: default mapping / unsupported / custom value. */
+function ThinkingMapRow({
+  level,
+  model,
+  onChange,
+}: {
+  level: ThinkingLevel;
+  model: CustomModel;
+  onChange: (state: MapLevelState, value: string) => void;
+}): React.JSX.Element {
+  const state = mapLevelState(model.thinkingLevelMap, level);
+  const value = typeof model.thinkingLevelMap?.[level] === "string"
+    ? (model.thinkingLevelMap[level] as string)
+    : "";
+  const reasoningOff = model.reasoning !== true;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="w-16 shrink-0 font-mono text-muted">{level}</span>
+      <select
+        value={state}
+        onChange={(e) => {
+          const next = e.target.value as MapLevelState;
+          // Keep the previous custom text when switching to 自定义 so an
+          // accidental toggle does not wipe a typed value.
+          onChange(next, value);
+        }}
+        className="rounded border border-border-strong bg-surface px-1.5 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
+      >
+        <option value="default">默认映射</option>
+        <option value="unsupported">不支持</option>
+        <option value="custom">自定义值</option>
+      </select>
+      {state === "custom" && (
+        <input
+          value={value}
+          onChange={(e) => onChange("custom", e.target.value)}
+          placeholder="发送给供应商的值"
+          spellCheck={false}
+          className={clsx(
+            "min-w-0 flex-1 rounded border border-border-strong bg-surface px-2 py-0.5 text-xs text-primary focus:border-focus focus:outline-none",
+            value.trim().length === 0 && "border-warning",
+          )}
+        />
+      )}
+      {reasoningOff && (
+        <span className="text-[10px] text-faint">
+          模型未启用 reasoning 时仅 off 生效（映射保留）
+        </span>
+      )}
+      {(level === "xhigh" || level === "max") && state === "default" && (
+        <span className="text-[10px] text-faint">默认不可用</span>
+      )}
+    </div>
+  );
+}
+
+function NumberInput({
+  value,
+  onValue,
+}: {
+  value: number | undefined;
+  onValue: (value: number | undefined) => void;
+}): React.JSX.Element {
+  return (
+    <input
+      type="number"
+      value={value ?? ""}
+      onChange={(e) =>
+        onValue(e.target.value === "" ? undefined : Number(e.target.value))
+      }
+      className="min-w-0 flex-1 rounded border border-border-strong bg-surface px-1.5 py-0.5 text-xs text-primary focus:border-focus focus:outline-none"
+    />
+  );
+}
+
+function IconButton({
+  onClick,
+  title,
+  danger,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  danger?: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={clsx(
+        "rounded p-1 text-dim hover:bg-surface-hover",
+        danger ? "hover:text-error" : "hover:text-secondary",
+      )}
+    >
+      {children}
+    </button>
   );
 }

@@ -8,7 +8,6 @@ import type {
   PermissionRule,
   PermissionRulesScope,
   PermissionRulesWorkspaceStatus,
-  ProviderAuthInfo,
 } from "../../../shared/ipc-contracts";
 import type { ThemeFile } from "../../../shared/theme/theme-file";
 import {
@@ -665,13 +664,12 @@ export function SettingsPanel(): React.JSX.Element {
           >
             <div className="text-sm text-muted">内嵌 Pi SDK v{sdkVersion}</div>
           </SettingsRow>
-        </SettingsSection>
-
-        {/* Provider credentials */}
-        <SettingsSection title="提供商凭据">
-          <ProviderCredentialsSection
-            onNotice={(message) => useAppStore.getState().setAuthNotice(message)}
-          />
+          <SettingsRow
+            label="提供商凭据"
+            description="API Key 等凭据由 Pi 自己的 models.json、auth.json 或环境变量提供；桌面端不提供登录管理入口。"
+          >
+            <span />
+          </SettingsRow>
         </SettingsSection>
 
         {/* Appearance */}
@@ -1269,127 +1267,5 @@ function Toggle({
         }`}
       />
     </button>
-  );
-}
-
-/**
- * Provider credentials section: lists the SDK's providers with their
- * non-sensitive credential status and offers API-key login/logout. Secrets
- * pass once through the auth modal into the admin helper; this component only
- * ever sees booleans and source labels.
- */
-function ProviderCredentialsSection({
-  onNotice,
-}: {
-  onNotice: (message: string | null) => void;
-}): React.JSX.Element {
-  const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [busyProvider, setBusyProvider] = useState<string | null>(null);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const result = await window.piDesktop.auth.listProviders();
-      setProviders(result.providers);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(formatUiError(err));
-    } finally {
-      setLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const handleLogin = async (providerId: string): Promise<void> => {
-    setBusyProvider(providerId);
-    onNotice("登录中…");
-    try {
-      const result = await window.piDesktop.auth.login(providerId);
-      if (result.ok) {
-        onNotice(null);
-      } else if (result.canceled) {
-        onNotice(null);
-      } else {
-        onNotice(`登录失败：${result.error}`);
-      }
-    } catch (err) {
-      onNotice(`登录失败：${formatUiError(err)}`);
-    } finally {
-      setBusyProvider(null);
-      await refresh();
-    }
-  };
-
-  const handleLogout = async (providerId: string): Promise<void> => {
-    setBusyProvider(providerId);
-    try {
-      const result = await window.piDesktop.auth.logout(providerId);
-      if (!result.ok) onNotice(`登出失败：${result.error}`);
-      else onNotice(null);
-    } catch (err) {
-      onNotice(`登出失败：${formatUiError(err)}`);
-    } finally {
-      setBusyProvider(null);
-      await refresh();
-    }
-  };
-
-  if (!loaded) {
-    return <div className="text-xs text-dim">正在读取提供商列表…</div>;
-  }
-  if (loadError) {
-    return <div className="text-xs text-dim">无法读取提供商：{loadError}</div>;
-  }
-  if (providers.length === 0) {
-    return (
-      <div className="text-xs text-dim">
-        尚无可用提供商。可在“模型配置”中添加自定义提供商。
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      {providers.map((provider) => (
-        <div
-          key={provider.providerId}
-          className="flex items-center justify-between gap-4 rounded-md border border-border-strong px-3 py-2"
-        >
-          <div className="min-w-0">
-            <div className="truncate text-sm text-primary">
-              {provider.providerId}
-            </div>
-            <div className="text-xs text-dim">
-              {provider.configured
-                ? `已配置${provider.source ? `（${provider.source}）` : ""}`
-                : "未配置"}
-            </div>
-          </div>
-          <div className="shrink-0">
-            {provider.configured ? (
-              <button
-                onClick={() => void handleLogout(provider.providerId)}
-                disabled={busyProvider !== null}
-                className="rounded-md border border-border-strong px-3 py-1 text-xs text-muted hover:bg-surface-hover transition-colors disabled:opacity-50"
-              >
-                {busyProvider === provider.providerId ? "处理中…" : "登出"}
-              </button>
-            ) : (
-              <button
-                onClick={() => void handleLogin(provider.providerId)}
-                disabled={busyProvider !== null || !provider.apiKeySupported}
-                className="rounded-md bg-accent px-3 py-1 text-xs text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {busyProvider === provider.providerId ? "处理中…" : "API Key 登录"}
-              </button>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }

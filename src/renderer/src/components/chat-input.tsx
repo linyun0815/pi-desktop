@@ -271,8 +271,16 @@ export function ChatInput(): React.JSX.Element {
     [builtins, resetComposer, resizeTextarea],
   );
 
+  // In-flight send guard: a rapid Enter and a click on the send button (or a
+  // double Enter) must not submit the same first message twice while the
+  // first send is still awaiting Pi startup / preflight.
+  const sendingRef = useRef(false);
+
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string): Promise<boolean> => {
+      if (sendingRef.current) return false;
+      sendingRef.current = true;
+
       // Record the raw prompt (pre-attachment-inlining) for ↑/↓ recall, and
       // reset any in-progress history navigation.
       recordPrompt(message);
@@ -303,14 +311,23 @@ export function ChatInput(): React.JSX.Element {
           .join("");
       }
 
-      sendPrompt(
-        fullMessage,
-        images.length > 0
-          ? { images, attachments: displayAttachments }
-          : undefined,
-      );
-      setAttachments([]);
-      resetComposer();
+      try {
+        const accepted = await sendPrompt(
+          fullMessage,
+          images.length > 0
+            ? { images, attachments: displayAttachments }
+            : undefined,
+        );
+        // Only a send the runtime accepted clears the composer: a failed
+        // startup or preflight keeps the draft and attachments for a retry.
+        if (accepted) {
+          setAttachments([]);
+          resetComposer();
+        }
+        return accepted;
+      } finally {
+        sendingRef.current = false;
+      }
     },
     [sendPrompt, attachments, recordPrompt, resetComposer],
   );
@@ -403,13 +420,20 @@ export function ChatInput(): React.JSX.Element {
     }
   }, []);
 
-  // A stopped agent stays typable: the first send lazy-starts Pi.
-  // Only transient/error states block input.
-  const isDisabled = piStatus === "starting" || piStatus === "error";
+  // The composer stays typable in every runtime state: a send during startup
+  // awaits the single-flighted start, and a send on a failed/idle runtime
+  // retries the start while keeping the draft — that IS the retry affordance.
+  const placeholder =
+    piStatus === "starting"
+      ? `${engineLabel} 正在启动…（现在输入，就绪后自动发送）`
+      : piStatus === "error"
+        ? `${engineLabel} 启动失败 — 按发送键重试`
+        : isStreaming
+          ? "输入内容来引导代理…"
+          : `向 ${engineLabel} 提问任何问题，输入 / 查看命令`;
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (isDisabled) return;
       const dt = e.clipboardData;
       if (!dt) return;
 
@@ -430,7 +454,7 @@ export function ChatInput(): React.JSX.Element {
       e.preventDefault();
       void Promise.all(imageFiles.map((f) => attachImageFile(f)));
     },
-    [attachImageFile, isDisabled],
+    [attachImageFile],
   );
 
   const removeAttachment = useCallback((index: number) => {
@@ -533,14 +557,7 @@ export function ChatInput(): React.JSX.Element {
 
         <textarea
           ref={textareaRef}
-          placeholder={
-            isDisabled
-              ? `${engineLabel} 代理未运行…`
-              : isStreaming
-                ? "输入内容来引导代理…"
-                : `向 ${engineLabel} 提问任何问题，输入 / 查看命令`
-          }
-          disabled={isDisabled}
+          placeholder={placeholder}
           rows={1}
           style={{ minHeight: MIN_INPUT_HEIGHT }}
           className="font-chat max-h-40 min-h-[40px] w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm leading-relaxed text-primary placeholder:text-faint outline-none disabled:opacity-50"
@@ -682,7 +699,6 @@ export function ChatInput(): React.JSX.Element {
           />
           <button
             onClick={handleAttachFile}
-            disabled={isDisabled}
             className="hover:bg-highlight-strong flex items-center justify-center rounded-md p-1.5 text-dim hover:text-secondary transition-colors disabled:opacity-50"
             title="附加文件"
             aria-label="附加文件"
@@ -718,10 +734,10 @@ export function ChatInput(): React.JSX.Element {
                   resetComposer();
                 }
               }}
-              disabled={isDisabled || isStreaming}
+              disabled={piStatus !== "running" || isStreaming}
               className="hover:bg-highlight-strong flex items-center justify-center rounded-md p-1.5 text-dim hover:text-secondary transition-colors disabled:opacity-50"
               title={
-                isDisabled
+                piStatus !== "running"
                   ? "使用委员会规划前请先启动 Pi"
                   : "使用委员会规划"
               }
@@ -739,13 +755,11 @@ export function ChatInput(): React.JSX.Element {
             )}
           </span>
 
-          {!isDisabled && (
-            <div className="flex h-6 shrink-0 items-center gap-0 rounded-md bg-card/60 ring-1 ring-inset ring-border-strong/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-              <ModelSelector compact />
-              <div className="h-3.5 w-px bg-border" aria-hidden="true" />
-              <ThinkingLevelSelector />
-            </div>
-          )}
+          <div className="flex h-6 shrink-0 items-center gap-0 rounded-md bg-card/60 ring-1 ring-inset ring-border-strong/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <ModelSelector compact />
+            <div className="h-3.5 w-px bg-border" aria-hidden="true" />
+            <ThinkingLevelSelector />
+          </div>
 
           {isStreaming ? (
             <button
@@ -761,10 +775,9 @@ export function ChatInput(): React.JSX.Element {
               onClick={() => {
                 const value = textareaRef.current?.value.trim();
                 if (value) {
-                  handleSend(value);
+                  void handleSend(value);
                 }
               }}
-              disabled={isDisabled}
               className="hover:bg-highlight-strong flex items-center justify-center rounded-lg p-1.5 text-dim hover:text-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               title="发送（Enter）"
               aria-label="发送消息"

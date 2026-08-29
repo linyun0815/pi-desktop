@@ -60,6 +60,66 @@ test('merge preserves unknown top-level, provider, and model fields', () => {
   assert.deepEqual(merged.providers.p.models![0].thinkingLevelMap, { high: 'max' })
 })
 
+test('an editor-provided thinkingLevelMap replaces the original outright', () => {
+  const original: ModelsConfig = {
+    providers: {
+      p: { models: [{ id: 'm', thinkingLevelMap: { off: 'none', high: 'max' } }] },
+    },
+  }
+  const edited: ModelsConfig = {
+    providers: {
+      p: { models: [{ id: 'm', thinkingLevelMap: { low: 'low', xhigh: null } }] },
+    },
+  }
+  const merged = mergeModelsConfig(original, edited)
+  // Editor-owned: no stale keys (off/high) survive from the old map.
+  assert.deepEqual(merged.providers.p.models![0].thinkingLevelMap, {
+    low: 'low',
+    xhigh: null,
+  })
+})
+
+test('an empty editor map removes the optional thinkingLevelMap field', () => {
+  const original: ModelsConfig = {
+    providers: {
+      p: { models: [{ id: 'm', thinkingLevelMap: { high: 'max' } }] },
+    },
+  }
+  const edited: ModelsConfig = {
+    providers: {
+      p: { models: [{ id: 'm', thinkingLevelMap: {} }] },
+    },
+  }
+  const merged = mergeModelsConfig(original, edited)
+  assert.equal(merged.providers.p.models![0].thinkingLevelMap, undefined)
+})
+
+test('validateModelsConfig flags bad thinkingLevelMap shapes with location', () => {
+  const errs = validateModelsConfig({
+    providers: {
+      p: {
+        models: [{ id: 'm', thinkingLevelMap: { low: '', bogus: 'x', high: 3 } as never }],
+      },
+    },
+  })
+  assert.ok(errs.some((e) => e.includes('提供商“p”、模型“m”') && e.includes('low')))
+  assert.ok(errs.some((e) => e.includes('未知级别“bogus”')))
+  assert.ok(errs.some((e) => e.includes('high')))
+})
+
+test('a valid map with null and string values passes validation', () => {
+  assert.deepEqual(
+    validateModelsConfig({
+      providers: {
+        p: {
+          models: [{ id: 'm', thinkingLevelMap: { off: 'none', xhigh: null, max: 'max' } }],
+        },
+      },
+    }),
+    [],
+  )
+})
+
 test('merge adds new and drops removed providers/models', () => {
   const original: ModelsConfig = {
     providers: { keep: { models: [{ id: 'a' }, { id: 'gone' }] }, drop: {} },

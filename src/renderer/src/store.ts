@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { applyTheme, setUserThemes, watchSystemTheme } from "./utils/theme";
 import { formatUiError } from "./utils/ipc-error";
-import type { AuthPromptPayload } from "../../shared/embedded-agent-protocol";
 import { buildPlanningPrompt } from "./utils/planning-prompt";
 import {
   parseAgentMessage,
@@ -343,10 +342,6 @@ interface AppState {
   // Fire-and-forget notify toast. Its own slot so a toast can never clobber
   // an unanswered blocking dialog (and vice versa); both can be on screen.
   extensionNotify: PiExtensionUiRequest | null;
-  // Active SDK auth prompt (API-key login). Answered via the auth bridge.
-  authPrompt: { loginId: string; prompt: AuthPromptPayload } | null;
-  // Last non-interactive auth progress/info line, for status display.
-  authNotice: string | null;
   // Blocking prompts held by main per workspace id (zero entries omitted).
   pendingPromptCounts: PendingPromptCounts;
   // Per-workspace background activity derived in main (idle entries omitted).
@@ -452,7 +447,14 @@ interface AppState {
 
 interface AppActions {
   // Pi lifecycle
-  startPi: (options?: Record<string, unknown>) => Promise<void>;
+  /**
+   * Ensure the active workspace's Pi runtime is up, sharing one in-flight
+   * start across all callers. Resolves true when running (or already
+   * running), false when there is no active workspace or the start failed —
+   * never throws. A visible `piError` is set on failure.
+   */
+  ensurePiStarted: () => Promise<boolean>;
+  startPi: () => Promise<void>;
   stopPi: () => Promise<void>;
   restartPi: (options?: Record<string, unknown>) => Promise<void>;
 
@@ -463,10 +465,16 @@ interface AppActions {
   recordPrompt: (text: string) => void;
 
   // Prompts
+  /**
+   * Send a prompt to the active Pi runtime. Resolves true when the runtime
+   * accepted the message (locally echoed, possibly queued behind a running
+   * turn), false when there is no workspace, the startup failed, or the
+   * preflight rejected it — with a readable system error added.
+   */
   sendPrompt: (
     message: string,
     options?: { images?: PromptImage[]; attachments?: DisplayAttachment[] },
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   sendSteer: (message: string) => Promise<void>;
   sendFollowUp: (message: string) => Promise<void>;
   runCouncil: (request: string) => Promise<void>;
@@ -498,7 +506,7 @@ interface AppActions {
   cloneBranch: () => Promise<void>;
 
   // Model
-  setModel: (provider: string, modelId: string) => Promise<void>;
+  setModel: (provider: string, modelId: string) => Promise<boolean>;
   cycleModel: () => Promise<void>;
   listModels: () => Promise<void>;
 
@@ -549,8 +557,6 @@ interface AppActions {
   // Extension UI
   respondExtensionUi: (id: string, response: Record<string, unknown>) => void;
   dismissExtensionUi: () => void;
-  setAuthPrompt: (prompt: { loginId: string; prompt: AuthPromptPayload } | null) => void;
-  setAuthNotice: (message: string | null) => void;
   dismissExtensionNotify: () => void;
 
   // App confirmation dialog (promise-based; resolves true on confirm)
@@ -687,6 +693,15 @@ function normalizePiCommands(raw: unknown): PiCommand[] {
 // Bumps on every session switch / explicit reload so in-flight getMessages
 // results from a previous switch are dropped instead of fighting the UI.
 let sessionLoadGeneration = 0;
+
+// Single-flight Pi start: every ensurePiStarted caller during one startup
+// awaits this same attempt instead of stacking duplicate helpers. Cleared in
+// its finally block; stopPi/restartPi invalidate it by awaiting completion of
+// whatever attempt was in flight before they tear down.
+let piStartPromise: {
+  workspaceId: string;
+  promise: Promise<boolean>;
+} | null = null;
 
 /**
  * Texts of prompts this GUI just sent to Pi, awaiting their echo on the RPC
@@ -950,8 +965,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
 
   extensionUiRequest: null,
   extensionNotify: null,
-  authPrompt: null,
-  authNotice: null,
   pendingPromptCounts: {},
   workspaceActivity: {},
   workflowRuns: [],
@@ -1001,32 +1014,82 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
 
   // ─── Pi Lifecycle ─────────────────────────────────────────────────────
 
-  startPi: async (options) => {
-    // Don't start if already running
-    if (get().piStatus === "running") return;
-
-    try {
-      const status = await window.piDesktop.pi.start(
-        options as Record<string, unknown> | undefined,
-      );
-      set({
-        piStatus: status.status,
-        piPid: status.pid,
-        piError: status.error,
-      });
-
-      if (status.status === "running") {
-        await get().refreshSessionState();
-        await get().refreshSessionStats();
-        await get().refreshSessionList();
-        await get().maybeWarnWorkspacePermissionRules();
-      }
-    } catch (err) {
-      set({ piStatus: "error", piError: formatUiError(err) });
+  ensurePiStarted: async () => {
+    const workspaceId = get().activeWorkspace?.id;
+    if (!workspaceId) return false;
+    if (get().piStatus === "running") return true;
+    // Every caller for the same workspace while a start is in flight awaits
+    // that attempt. A different workspace waits for the old IPC call to settle
+    // and then starts its own runtime, so an old result cannot mark the new
+    // workspace as running or strand it in the stopped state.
+    if (piStartPromise) {
+      const pending = piStartPromise;
+      if (pending.workspaceId === workspaceId) return pending.promise;
+      const result = await pending.promise;
+      if (get().activeWorkspace?.id !== workspaceId) return false;
+      if (result && get().piStatus === "running") return true;
+      return get().ensurePiStarted();
     }
+
+    const startPromise = (async () => {
+      try {
+        // Synchronous surface: the UI immediately shows startup instead of a
+        // stale stopped/error state while the IPC round-trip runs.
+        if (get().piStatus !== "starting") set({ piStatus: "starting" });
+        const status = await window.piDesktop.pi.start();
+        // The active workspace may have changed while main was starting the
+        // previous one. Its runtime remains useful in the background, but its
+        // result must not overwrite the current workspace's status.
+        if (get().activeWorkspace?.id !== workspaceId) return false;
+        set({
+          piStatus: status.status,
+          piPid: status.pid,
+          piError: status.error,
+        });
+        if (status.status === "running") {
+          await get().refreshSessionState();
+          await get().refreshSessionStats();
+          await get().refreshSessionList();
+          await get().maybeWarnWorkspacePermissionRules();
+        }
+      } catch (err) {
+        if (get().activeWorkspace?.id === workspaceId) {
+          set({ piStatus: "error", piError: formatUiError(err) });
+        }
+      } finally {
+        // A second start cannot be created while this record is present, so
+        // clearing it here is sufficient and keeps the in-flight promise's
+        // lifecycle independent from workspace changes.
+        piStartPromise = null;
+      }
+      const state = get();
+      if (
+        state.piStatus === "running" &&
+        state.activeWorkspace?.id === workspaceId
+      ) {
+        return true;
+      }
+      if (state.activeWorkspace?.id === workspaceId) {
+        // A failed start must never be silent: surface a retryable error.
+        set({
+          piStatus: "error",
+          piError: state.piError ?? "Pi 启动失败，请稍后重试。",
+        });
+      }
+      return false;
+    })();
+    piStartPromise = { workspaceId, promise: startPromise };
+    return startPromise;
   },
 
+  startPi: async () => {
+    // Existing lifecycle API; shares the single-flight start implementation.
+    await get().ensurePiStarted();
+  },
   stopPi: async () => {
+    // Let an in-flight start settle before tearing down, so it cannot
+    // resurrect a helper after the stop committed.
+    await piStartPromise?.promise.catch(() => undefined);
     try {
       const status = await window.piDesktop.pi.stop();
       set({
@@ -1040,6 +1103,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   },
 
   restartPi: async (options) => {
+    await piStartPromise?.promise.catch(() => undefined);
     try {
       const status = await window.piDesktop.pi.restart(
         options as Record<string, unknown> | undefined,
@@ -1104,19 +1168,43 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       // Route through the action so a session-scoped filter can never leak
       // into the global view opened from chat.
       get().setWorkflowPanelOpen(true);
-      return;
+      return true;
     }
     if (trimmed.startsWith("/workflows run ")) get().setWorkflowPanelOpen(true);
 
-    // Navigation never spawns Pi; the first prompt does. startPi applies the
-    // resume preference, so a previously-used project continues its last
-    // conversation; a fresh one gets a new session.
-    if (get().piStatus !== "running") {
-      await get().startPi();
-      if (get().piStatus !== "running") return;
+    // The workspace normally starts Pi in the background during activation;
+    // ensurePiStarted is still the single-flight fallback for a cold/evicted
+    // runtime, so a prompt sent while startup is running waits instead of being
+    // lost.
+    if (!(await get().ensurePiStarted())) {
+      const workspaceless = !get().activeWorkspace;
+      get().addMessage({
+        id: generateId(),
+        role: "system",
+        content: workspaceless
+          ? "还没有活动项目，无法发送消息。请先打开一个项目文件夹。"
+          : `Pi 启动失败，消息未发送：${get().piError ?? "未知错误"}。请重试。`,
+        timestamp: Date.now(),
+      });
+      return false;
     }
 
     const { isStreaming, sessionState, settings } = get();
+
+    // A runtime that positively reports no configured model cannot accept
+    // prompts; direct the user at the configuration surfaces instead of a
+    // doomed send. A not-yet-loaded sessionState (null) stays out of the way —
+    // Pi's own preflight rejects those sends with the real reason.
+    if (!isStreaming && sessionState && !sessionState.model) {
+      get().addMessage({
+        id: generateId(),
+        role: "system",
+        content:
+          "没有可用模型。请在 设置 → 自定义模型 中配置 models.json，或通过环境变量配置提供商凭据后重启 Pi。",
+        timestamp: Date.now(),
+      });
+      return false;
+    }
 
     // Extract #tags from message
     const tagMatches = message.match(/#([a-z0-9_-]+)/gi);
@@ -1127,7 +1215,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       }
     }
 
-    // Add user message immediately
+    // Add user message immediately (runtime is ready at this point)
     get().addMessage({
       id: generateId(),
       role: "user",
@@ -1158,6 +1246,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         recordLocalEcho(prompt);
         await window.piDesktop.commands.prompt(prompt, options);
       }
+      return true;
     } catch (err) {
       get().addMessage({
         id: generateId(),
@@ -1165,7 +1254,11 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         content: `错误：${formatUiError(err)}`,
         timestamp: Date.now(),
       });
-      set({ isStreaming: false });
+      // The turn never started: clear the full per-turn state (a stuck
+      // streaming bubble has no incoming event to close it) but keep the user
+      // message above so it can simply be retried.
+      set(idleTurnState());
+      return false;
     }
   },
 
@@ -1963,7 +2056,8 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
       } catch {
         // Non-fatal — model still applied for this session.
       }
-      get().refreshSessionState();
+      await get().refreshSessionState();
+      return true;
     } catch (err) {
       get().addMessage({
         id: generateId(),
@@ -1971,6 +2065,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         content: `模型错误：${formatUiError(err)}`,
         timestamp: Date.now(),
       });
+      return false;
     }
   },
 
@@ -2536,14 +2631,6 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
     }
   },
 
-  setAuthPrompt: (prompt) => {
-    set({ authPrompt: prompt });
-  },
-
-  setAuthNotice: (message) => {
-    set({ authNotice: message });
-  },
-
   dismissExtensionNotify: () => {
     const { extensionNotify } = get();
     if (!extensionNotify) return;
@@ -2882,11 +2969,21 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   },
 
   // Instant navigation: committing the project pointer never spawns a
-  // process. A workspace with a live runtime shows that session right away
-  // (the process is already up — only history hydrates); anything else shows
-  // the empty new-session view immediately. Pi starts lazily on first prompt.
+  // process in the caller's critical path. A workspace with a live runtime
+  // shows that session right away (the process is already up — only history
+  // hydrates); anything else shows the empty new-session view immediately
+  // while Pi starts up in the background (single-flighted via
+  // ensurePiStarted), so the model picker and first prompt are ready.
   activateWorkspace: async (workspaceId, options) => {
-    if (get().activeWorkspace?.id === workspaceId) return true;
+    if (get().activeWorkspace?.id === workspaceId) {
+      // Main-side activation (duplicate-path create, first-workspace open)
+      // lands here with the id already active: the switch is done, but the
+      // background start must still happen or Pi never comes up.
+      if (get().piStatus !== "running" && options?.awaitingSession !== true) {
+        void get().ensurePiStarted();
+      }
+      return true;
+    }
     if (
       !options?.skipDirtyConfirm &&
       !(await get().confirmDiscardEditorChanges())
@@ -2929,6 +3026,11 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
         if (activity === "working" || activity === "needs-approval") {
           set({ isStreaming: true, reattachedMidTurn: true });
         }
+      } else if (!live && options?.awaitingSession !== true) {
+        // Idle workspace: background-start Pi so the model list fills in and
+        // the first prompt has a runtime waiting. The empty new-session view
+        // renders instantly either way.
+        void get().ensurePiStarted();
       }
       return true;
     } catch (err) {
@@ -3016,9 +3118,10 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
           set({ isStreaming: true, reattachedMidTurn: true });
         }
       } else if (get().piStatus !== "running") {
-        // Idle workspace: the empty new-session view renders instantly. No
-        // spinner, no process — Pi starts when the first prompt is sent.
+        // Idle workspace: the empty new-session view renders instantly while
+        // Pi starts up in the background (model list + first prompt ready).
         set({ sessionState: null, sessionStats: null, sessionLoading: false });
+        void get().ensurePiStarted();
       } else {
         // Stats only. Refreshing sessionState here races the follow-up
         // switchSession this flow contracts for: when the refresh lands
@@ -3256,6 +3359,9 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
     if (!result.success)
       return { ok: false, errors: [formatUiError(result.error ?? "写入失败")] };
     await get().loadCustomModels();
+    // Main hot-reloaded every idle runtime's ModelRuntime during the write;
+    // refresh the session snapshot so the status bar's model label follows.
+    await get().refreshSessionState();
     return { ok: true };
   },
 

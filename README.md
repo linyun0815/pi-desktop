@@ -29,12 +29,13 @@ Still in alpha, so expect rough edges.
 - Streaming chat with thinking blocks, tool use, and rich rendering: bundled fonts and color emoji, inline SVG preview, and clickable file links that open a preview pane. Consecutive tool calls fold into collapsible groups. File reads show as line-numbered, syntax-highlighted code and edits as diffs
 - Find within a conversation (`Ctrl/Cmd+F`); streaming follows new output only while you're at the bottom, with a jump-to-bottom control
 - Composer file mentions (type `@` to insert a path reference for Pi to read) and `Up`/`Down` to recall prompts sent in the current session
-- Model switching (`Ctrl+P`) with tokenized search, thinking-level control, and live token/cost tracking
+- Model switching (`Ctrl+P`) with tokenized search, thinking-level control, and live token/cost tracking; the picker only offers levels the selected model actually supports, and custom models can map each thinking level to a provider-specific value (or mark it unsupported) in **Settings → Custom models**
 
 ### Projects and sessions
 
 - Multiple workspaces, with an independent agent process per live session, so a turn keeps running when you switch away from it; Mission Control and sidebar activity dots surface background work across projects, with optional desktop notifications when a session finishes, fails, or waits for approval
-- Home dashboard with usage stats: messages, tokens, active-day streaks, peak hour, and a per-model breakdown
+- Pi starts automatically in the background whenever a workspace is active (at launch, on opening a project, on switching) — the first prompt never waits on a cold start, and a send while startup is still running is delivered once the runtime is ready. Failed startups keep the composer draft and offer a retry
+- Home dashboard with usage stats: messages, tokens, active-day streaks, peak hour, and a per-model breakdown; a model picker on Home chooses (or pre-selects) the model even before a session starts
 - New Task launcher starts a real fresh Pi session in a selected project, optionally in an isolated Git worktree, and sends the issue immediately while work continues in the background; matching task metadata, explicit branches, and GitHub PR URLs reuse an existing local worktree when found
 - Session naming (read from Pi) with inline rename, session tags (`#tag-name` in chat), a themed in-app confirmation for delete, and a session fork/branch tree with one-click context compaction
 - Quick switcher (`Ctrl/Cmd+K`) for skills, prompt templates, built-in commands, workspaces, sessions, and files; `/` in the composer for commands
@@ -74,7 +75,7 @@ Changed files use readable status badges:
 
 Pi Desktop ships the Pi coding agent as an **embedded SDK** (`@earendil-works/pi-coding-agent`, pinned exactly per release). There is no Pi CLI to install and no system Node requirement: each live session runs on its own Electron utility process executing the SDK on the Node runtime Electron bundles. The runtime reuses Pi's own data in place — `auth.json`, `models.json`, `settings.json`, and the sessions under `~/.pi/agent/sessions` (override with `PI_CODING_AGENT_DIR`).
 
-Settings shows the embedded SDK version and the login state of your provider credentials (**Settings → Provider credentials**, API-key login). Optional Pi package installs/updates need `npm` (git sources need `git`) on your PATH; without them, basic chat and already-installed packages keep working, and missing packages are reported instead of auto-installed.
+Settings shows the embedded SDK version. Provider credentials are owned by Pi itself — configure them through `models.json` (`apiKey` field), Pi's `auth.json`, or environment variables; the desktop offers no login surface and never touches existing credentials. Optional Pi package installs/updates need `npm` (git sources need `git`) on your PATH; without them, basic chat and already-installed packages keep working, and missing packages are reported instead of auto-installed.
 
 Old `~/.omp` data is left on disk untouched but is no longer listed, resumed, or migrated.
 

@@ -6,7 +6,6 @@ import { ArchivedSessionsManager } from '../archived-sessions'
 import { TerminalService } from '../terminal-service'
 import { NotesManager } from '../notes-manager'
 import { EmbeddedPiAdminManager } from '../embedded-pi-admin'
-import { IPC_CHANNELS } from '../../shared/ipc-contracts'
 
 export interface IpcContext {
   workspaceManager: WorkspaceManager
@@ -17,7 +16,7 @@ export interface IpcContext {
   archivedSessions: ArchivedSessionsManager
   notesManager: NotesManager
   terminalService: TerminalService
-  /** Lazy admin helper: SDK auth + package management, never sessions. */
+  /** Lazy admin helper: SDK package management, never sessions. */
   adminManager: EmbeddedPiAdminManager
 }
 
@@ -59,8 +58,6 @@ export function createIpcContext(workspaceManager: WorkspaceManager): IpcContext
     notesManager,
     terminalService,
     adminManager: new EmbeddedPiAdminManager({
-      onAuthPrompt: (loginId, prompt) => broadcast(IPC_CHANNELS.EVENT_AUTH_PROMPT, { loginId, prompt }),
-      onAuthNotify: (loginId, event) => broadcast(IPC_CHANNELS.EVENT_AUTH_NOTIFY, { loginId, event }),
       cwd: () => workspaceManager.getActiveWorkspace()?.path ?? process.env.HOME ?? process.cwd(),
     }),
   }

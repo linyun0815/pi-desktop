@@ -36,13 +36,6 @@ export function usePiEvents(): void {
     const unsubscribeCounts = window.piDesktop.onPendingPrompts(
       handlePendingPromptCounts,
     );
-    // SDK auth flow prompts and progress lines (API-key login).
-    const unsubscribeAuthPrompt = window.piDesktop.auth.onAuthPrompt((event) => {
-      useAppStore.getState().setAuthPrompt(event);
-    });
-    const unsubscribeAuthNotify = window.piDesktop.auth.onAuthNotify((event) => {
-      useAppStore.getState().setAuthNotice(event.event.message);
-    });
     const unsubscribeActivity = window.piDesktop.onWorkspaceActivity(
       handleWorkspaceActivity,
     );
@@ -121,8 +114,6 @@ export function usePiEvents(): void {
     return () => {
       unsubscribeEvent();
       unsubscribeCounts();
-      unsubscribeAuthPrompt();
-      unsubscribeAuthNotify();
       unsubscribeActivity();
       unsubscribeSessionRuntime();
       unsubscribeActivate();
@@ -457,6 +448,10 @@ export function useChatScroll(active: boolean): {
 
 /**
  * Keyboard shortcut handler for the chat input.
+ *
+ * Enter routes through the same `onSend` the button uses; that callback owns
+ * clearing the composer (only after the runtime accepts the prompt), so the
+ * keyboard path must never clear it directly — a failed send keeps its draft.
  */
 export function useChatKeyboard(
   onSend: (message: string) => void,
@@ -482,10 +477,7 @@ export function useChatKeyboard(
       ) {
         e.preventDefault();
         const value = inputRef.current?.value.trim();
-        if (value) {
-          onSend(value);
-          if (inputRef.current) inputRef.current.value = "";
-        }
+        if (value) onSend(value);
       }
     };
 
@@ -591,7 +583,6 @@ export function useCommandCatalog(): {
  * Loads initial data on mount — workspaces, settings, then Pi.
  */
 export function useInitialize(): void {
-  const startPi = useAppStore((state) => state.startPi);
   const loadSettings = useAppStore((state) => state.loadSettings);
   const loadWorkspaces = useAppStore((state) => state.loadWorkspaces);
   const refreshSessionStats = useAppStore((state) => state.refreshSessionStats);
@@ -605,9 +596,6 @@ export function useInitialize(): void {
 
     const initialize = async (): Promise<void> => {
       await loadSettings();
-      const openToHome =
-        useAppStore.getState().settings?.openToHomeOnLaunch ??
-        DEFAULT_SETTINGS.openToHomeOnLaunch;
 
       // Workspaces are needed for the shell chrome; land the UI immediately after.
       await loadWorkspaces();
@@ -620,12 +608,13 @@ export function useInitialize(): void {
         )
         .catch(() => undefined);
 
-      if (openToHome) {
+      const state = useAppStore.getState();
+      if (state.settings?.openToHomeOnLaunch ?? DEFAULT_SETTINGS.openToHomeOnLaunch) {
         // Interactive ASAP — do NOT wait on the session-store walk (can be tens
         // of seconds on a large ~/.pi/agent/sessions tree and freezes main IPC).
-        useAppStore.getState().setCurrentView("home");
+        state.setCurrentView("home");
       } else {
-        useAppStore.getState().setCurrentView("chat");
+        state.setCurrentView("chat");
       }
 
       // Background: session list, tags, notes, models, updates.
@@ -633,23 +622,26 @@ export function useInitialize(): void {
       // Load the workflow journal once at boot so the status-bar badge and the
       // sidebar workflow entries show live runs before the navigator is first
       // opened (its poll loop keeps it fresh afterwards).
-      void useAppStore.getState().refreshWorkflowRuns();
-      void useAppStore.getState().loadTags();
-      void useAppStore.getState().loadArchivedSessions();
-      void useAppStore.getState().loadNotes();
-      void useAppStore.getState().loadCustomModels();
-      void useAppStore.getState().checkForUpdates();
+      void state.refreshWorkflowRuns();
+      void state.loadTags();
+      void state.loadArchivedSessions();
+      void state.loadNotes();
+      void state.loadCustomModels();
+      void state.checkForUpdates();
 
-      if (openToHome) {
-        // Pi starts lazily on first action from Home.
-        return;
+      // An active workspace always gets its Pi runtime in the background,
+      // regardless of which page booted: the model picker needs it and the
+      // first prompt should not pay the startup cost. openToHomeOnLaunch only
+      // chooses the landing page now. No active workspace means no runtime —
+      // the app never fakes one at the home directory; opening a project
+      // starts its Pi through activateWorkspace/openFolderAsWorkspace.
+      if (useAppStore.getState().activeWorkspace) {
+        void useAppStore
+          .getState()
+          .ensurePiStarted()
+          .then(() => refreshSessionStats())
+          .catch(() => undefined);
       }
-
-      // Boot Pi in the background. The shell is already interactive; the
-      // session-runtime running event hydrates Chat when the process is ready.
-      void startPi()
-        .then(() => refreshSessionStats())
-        .catch(() => undefined);
       void window.piDesktop.workspace
         .getActivity()
         .then((activity) =>
@@ -660,7 +652,6 @@ export function useInitialize(): void {
 
     initialize();
   }, [
-    startPi,
     loadSettings,
     loadWorkspaces,
     refreshSessionStats,

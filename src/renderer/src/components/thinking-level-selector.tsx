@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronUp, Zap } from "lucide-react";
 import { clsx } from "clsx";
 import { useAppStore } from "../store";
+import {
+  supportedThinkingLevels,
+  THINKING_LEVELS,
+} from "../../../shared/model-thinking";
 
 interface ThinkingLevelSelectorProps {
   className?: string;
@@ -17,13 +21,15 @@ export function ThinkingLevelSelector({
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  const modelEfforts = sessionState?.model?.thinking?.efforts?.filter(
-    (level) => typeof level === "string" && level.length > 0,
-  );
-  const levels =
-    modelEfforts && modelEfforts.length > 0
-      ? ["off", ...modelEfforts.filter((level) => level !== "off")]
-      : ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const model = sessionState?.model;
+  // Mirror the SDK's own support rules (reasoning flag + thinkingLevelMap):
+  // without model info there is nothing to narrow by, so show the full list.
+  const levels = model
+    ? supportedThinkingLevels({
+        reasoning: model.reasoning,
+        thinkingLevelMap: model.thinkingLevelMap,
+      })
+    : [...THINKING_LEVELS];
   const currentLevel = sessionState?.thinkingLevel ?? "medium";
 
   useEffect(() => {

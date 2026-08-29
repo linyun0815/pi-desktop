@@ -46,6 +46,7 @@ src/
 │   ├── default-settings.ts       # Single source of truth for AppSettings defaults
 │   ├── council-config.ts         # Council planning config, prompts, parsers
 │   ├── models-config.ts          # Custom models.json validate/merge
+│   ├── model-thinking.ts         # Thinking levels + thinkingLevelMap semantics (SDK-aligned), shared by protocol/editor/selectors
 │   ├── package-filter.ts         # Tokenized catalog search, shared main+renderer
 │   ├── package-spec.ts           # Validate package specs before the Pi CLI runs
 │   ├── path-compare.ts           # Platform-aware path equality (win32 case-fold); main+renderer
@@ -65,8 +66,9 @@ src/
 │   ├── diagnostics.ts            # Assembles the Diagnostics view's report
 │   ├── diagnostics-report.ts     # Pure report helpers (provider key classification etc.)
 │   ├── pi-sdk-manager.ts         # PiSdkManager: one utility-process helper per live session (PiSdkManager), readiness, request correlation, graceful shutdown + tree kill
-│   ├── embedded-pi-worker.ts     # The utility-process helper: hosts AgentSessionRuntime from the Pi SDK (session + admin modes)
-│   ├── embedded-pi-admin.ts      # EmbeddedPiAdminManager: lazy admin helper for API-key auth + package management
+│   ├── prompt-acceptance.ts      # Exactly-once completion for the worker's deferred prompt (accept/reject/throw)
+│   ├── embedded-pi-worker.ts     # The utility-process helper: hosts AgentSessionRuntime from the Pi SDK (session + admin/package modes)
+│   ├── embedded-pi-admin.ts      # EmbeddedPiAdminManager: lazy admin helper for package management (no auth)
 │   ├── process-tree.ts           # Cross-platform descendant enumeration + tree kill
 │   ├── pi-paths.ts               # Pi agent dir + session store roots (authorization gates)
 │   ├── session-trash.ts          # Deleted sessions go to the desktop trash (trash-cli, then gio)
@@ -121,7 +123,7 @@ src/
             ├── chat-panel.tsx     # Main streaming chat; empty session = center prompt + project picker
             ├── chat-project-picker.tsx # Empty-chat project / no-project picker under the composer
             ├── chat-input.tsx     # Input with #tag support
-            ├── model-selector.tsx # Status-bar model picker (searchable)
+            ├── model-selector.tsx # Composer + Home model picker (searchable; status/starting/error aware)
             ├── subagent-progress.tsx # Compact live subagent strip on the composer
             ├── chat-code-highlight.ts # Fenced-code syntax highlighting -> HTML
             ├── chat-file-link.ts  # Detect/classify filenames mentioned in chat text
@@ -137,7 +139,8 @@ src/
             ├── status-bar.tsx     # Model selector, thinking, stats
             ├── status-popover.tsx # System status popup
             ├── settings-panel.tsx # Theme, font, behavior, council settings (live-preview draft)
-            ├── custom-models-editor.tsx # Custom models/providers editor
+            ├── custom-models-editor.tsx # Custom models/providers editor (collapsible, three-state thinking map)
+            ├── custom-models-editor-helpers.ts # Editor rows <-> models.json conversions + validation (pure)
             ├── permission-selector.tsx # Permission mode selector
             ├── permission-mode.ts # Permission mode helpers
             ├── permission-rules-editor.tsx # Permission rules editor (Settings -> Behavior)
@@ -171,7 +174,12 @@ src/
 - The helper converts SDK events into the renderer's established event shapes (`message_update` without `partial`, toolCall blocks re-attached for toolcall_* deltas, `thinking_level_changed` → `config_update`) and mirrors the SDK RPC mode's extension UI bridge over `parentPort` (`uiRequest` messages surface as ordinary `extension_ui_request` events, so the router and dialogs are unchanged). Helper `sessionBound` messages re-map the workspace runtime to the new session file (two helpers can never write one JSONL).
 - The old `PiRpcManager`, binary resolution, and `run-pi-cli.ts` are deleted. Renderer-facing IPC channels and event shapes are preserved; `piEngine`/`AgentEngineKind`/`PI_DETECT_INSTALLATIONS` and the OMP session store are removed (legacy `~/.omp` data stays untouched on disk).
 - Every surface that names the agent reads `shared/agent-engine-label.ts` (now the constant "Pi"); the permission extension gets the label via `PI_DESKTOP_AGENT_LABEL`.
-- Provider credentials: a lazy `EmbeddedPiAdminManager` runs a second helper mode (same worker entry, first message decides) for API-key login/logout via `ModelRuntime.login(providerId, "api_key", interaction)` and package install/remove/update via `DefaultPackageManager`. Secrets traverse one relay message and are never logged. Package ops without npm/git return a localized "optional tooling" error; without npm the session helpers set `PI_OFFLINE=1` so missing configured packages are skipped-and-diagnosed instead of auto-installed.
+- Provider credentials are owned by Pi itself (`models.json` `apiKey` fields, `auth.json`, environment); the desktop ships **no login UI and no auth IPC**. A lazy `EmbeddedPiAdminManager` runs a second helper mode (same worker entry, first message decides) solely for package install/remove/update and npm/git availability via `DefaultPackageManager`; the admin protocol and helper carry no auth messages. Package ops without npm/git return a localized "optional tooling" error; without npm the session helpers set `PI_OFFLINE=1` so missing configured packages are skipped-and-diagnosed instead of auto-installed.
+
+### Startup & first prompt
+
+- One single-flighted renderer start: `ensurePiStarted()` (store) boots the active workspace's Pi, shares one in-flight start across all callers, and reports success/failure instead of throwing. `startPi()` remains as the lifecycle alias. An active workspace starts Pi at boot and on every workspace activation/switch, regardless of `openToHomeOnLaunch` (that setting only picks the landing page); a send that arrives while startup is running waits on the same attempt and delivers exactly once.
+- `sendPrompt()` resolves `Promise<boolean>` (true = accepted by Pi). Failures — no workspace, failed start, no configured model — add one readable system error and return false; a rejected/failed send clears the full per-turn state and keeps the user's draft, and `ChatInput.handleSend` only clears the composer when the send was accepted (with a `sendingRef` guard so Enter + button can't double-submit). Prompt options are validated strictly on the IPC and protocol boundaries (per-image shape, closed `steer`/`followUp` set); the worker answers each prompt request exactly once (`prompt-acceptance.ts`), and `PiSdkManager` rejects pending requests on helper exit/teardown/timeout.
 
 ### Workspace Management
 
@@ -215,9 +223,9 @@ src/
 
 ### Model & Thinking
 
-- Model selector dropdown in status bar, with tokenized search ("sonnet 4" matches `claude-sonnet-4`)
+- Model picker (composer rail, plus a Home variant of the same component) with tokenized search ("sonnet 4" matches `claude-sonnet-4`); selecting on a running session applies it via `setModel()`, otherwise the default is persisted for the next start
 - `Ctrl+P` to cycle models
-- Thinking level selector (off/minimal/low/medium/high/xhigh)
+- Thinking level selector (`shared/model-thinking.ts`: off/minimal/low/medium/high/xhigh/max) — the listed levels mirror the SDK's support rules: non-reasoning models only offer `off`; `xhigh`/`max` appear only when the model's `thinkingLevelMap` provides a value; a `null` map entry hides the level. After a model switch the session state refresh carries the SDK's clamp result
 - Token usage and cost tracking in status bar
 
 ### Command Palette / Quick Switcher
@@ -271,7 +279,7 @@ src/
 
 ### Home / Activity Dashboard
 
-- **Open to Home on Launch** (Settings → Behavior): when on, boot lands on the full Home launcher (stats, changed files, recent workspaces/sessions, Open Folder / New Session). When off, boot opens Chat; an empty session uses a Codex-style **center prompt** with a **project picker** under the composer (sidebar + status chrome stay)
+- **Open to Home on Launch** (Settings → Behavior): when on, boot lands on the full Home launcher (stats, model picker, changed files, recent workspaces/sessions, Open Folder / New Session). When off, boot opens Chat; an empty session uses a Codex-style **center prompt** with a **project picker** under the composer (sidebar + status chrome stay). Either way Pi auto-starts when a workspace is active — the setting only chooses the landing page
 - Home is a single info/launcher surface — there is no separate Minimal Home layout or `homeLayout` setting
 - Suggested prompt chips on empty chat **fill the composer** (ready for Enter); they do not auto-send a turn
 - Recent sidebar groups sessions by project folder (platform-aware path equality)
@@ -315,7 +323,7 @@ Click the status icon in the sidebar header to see:
 - Every field (theme, permission mode, toggles, font sizes) live-previews before Save via a unified settings draft (`store.ts` `settingsDraft`); survives view switches; Save persists, Reset restores `DEFAULT_SETTINGS`
 - Permission rules: user-defined allow/deny rules (glob per Pi tool) that overlay the permission modes. Deny beats allow beats mode default; deny applies in every mode. Global rules live in `<GUI data dir>/permission-rules.json`. A workspace `.pi-desktop/permission-rules.json` is gated by workspace trust: when the workspace is trusted it fully replaces the global rules; when untrusted (the default) only its deny rules apply, layered on top of the global rules, and its allow rules are ignored (a repo can tighten, never grant). Opening a workspace whose rules file contains allow rules shows a trust prompt; the editor's Global tab notes the override and the This workspace tab carries a Trust/Revoke control. Settings → Behavior edits BOTH scopes via Global | This workspace tabs: create, edit, and remove workspace rules (in-app danger confirm), Copy from global (seeds an unsaved draft from the current global list), and per-scope JSON import/export. Manual editing of either file on disk remains fully supported — switching scope tabs re-reads that file when the scope has no unsaved draft, so hand-edited rules show up without a restart. Engine: `resources/permission-rules.ts`, shared by the Pi extension (jiti relative import, mtime-cached live re-read) and the main process. The permissions extension always loads alongside Pi when present on disk, regardless of mode or whether rules currently exist, so a rules file created mid-session is enforced immediately rather than after a restart.
   - Trust posture: a workspace's `.pi-desktop/permission-rules.json` is repo content, so its allow rules take effect only after the user explicitly trusts the workspace. `trusted-workspaces.json` is versioned (`{version:2, trusted, pendingReconfirmation}`); legacy v1 array records are demoted to `pendingReconfirmation` on first read and a re-confirm prompt on the workspace's next open promotes them. Trust is the ONE unified switch: it authorizes the workspace's allow rules, its project Pi resources (`.pi/settings.json`, extensions, packages, skills — passed to the helper as `projectTrusted`), and its interactive HTML preview. Trusting/revoking restarts the workspace's live helpers so all three take effect together. Until trusted, the repo can only add deny rules — it cannot suppress ask-mode prompts. Rule globs match raw tool input strings only (no path canonicalization, no command parsing), so rules are a guardrail against accidents, not a security sandbox; the Electron helper is not an OS sandbox either.
-- Custom models & providers editor — edits `~/.pi/agent/models.json` (applied on Pi restart)
+- Custom models & providers editor — edits `~/.pi/agent/models.json`. Providers render as collapsible cards; each model has a three-state `thinkingLevelMap` editor per level (default mapping / unsupported (`null`) / custom provider value) in `custom-models-editor.tsx` + `custom-models-editor-helpers.ts` (pure conversions/validation, unit-tested). `apiKey` inputs are password-masked with a show/hide toggle and are never echoed in logs, status, or errors. Saving validates (empty/duplicate keys, empty custom values), overlays the edited fields while preserving unknown JSON fields (`mergeModelsConfig`; an editor-supplied map replaces the original outright, an empty map removes it), and main hot-reloads idle runtimes' ModelRuntime during the write — busy runtimes pick the new config up on their next start, and the editor says which state applies
 - All settings persisted to `~/.pi-desktop-gui/settings.json`; defaults come from the single shared `src/shared/default-settings.ts` (used to seed the file AND for the renderer's initial/Reset values)
 
 ### Context Menu
@@ -355,7 +363,7 @@ data-dir migration the GUI's files live under the OS app-data dir
 | `~/.pi-desktop-gui/app-log.jsonl` | Main-process app log (warnings/errors for the Diagnostics view) |
 | `~/.pi/agent/sessions/` | Pi session files (organized by cwd; the only store the index reads) |
 | `~/.pi/agent/settings.json` | Pi global settings (reused in place by the embedded runtime) |
-| `~/.pi/agent/auth.json` | Provider credentials written by SDK API-key login |
+| `~/.pi/agent/auth.json` | Provider credentials read by the Pi SDK itself (never written or cleared by the desktop) |
 | `~/.pi/agent/models.json` | Pi model/provider config (edited by Settings; idle helpers hot-reload) |
 | `.pi/settings.json` | Pi project settings (loaded only for trusted workspaces) |
 | *(legacy)* `~/.omp/agent/` | Old OMP data — never read, listed, or migrated; left untouched on disk |

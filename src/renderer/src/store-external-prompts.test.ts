@@ -33,6 +33,15 @@ before(async () => {
 beforeEach(() => {
   useAppStore.setState({
     piStatus: "running",
+    // A running runtime implies an active workspace: sendPrompt refuses to
+    // deliver into the void without one.
+    activeWorkspace: {
+      id: "ws",
+      name: "W",
+      path: "/w",
+      color: "#000",
+      lastActiveAt: 0,
+    } as ReturnType<typeof useAppStore.getState>["activeWorkspace"],
     settings: null,
     isStreaming: false,
     messages: [],

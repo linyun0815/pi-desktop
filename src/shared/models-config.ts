@@ -1,3 +1,8 @@
+import {
+  validateThinkingLevelMap,
+  type ThinkingLevelMap,
+} from "./model-thinking";
+
 export interface CustomModelCost {
   input: number;
   output: number;
@@ -20,8 +25,10 @@ export interface CustomModel {
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** Pi-native per-model thinking-level mapping (missing = provider default, null = unsupported). */
+  thinkingLevelMap?: ThinkingLevelMap;
   cost?: CustomModelCost;
-  // Preserve fields the editor does not expose (compat, thinkingLevelMap, ...).
+  // Preserve fields the editor does not expose (compat, ...).
   [key: string]: unknown;
 }
 
@@ -78,6 +85,12 @@ export function validateModelsConfig(config: ModelsConfig): string[] {
           errors.push(`提供商“${key}”、模型“${id}”：${field} 必须是有限数字`);
         }
       }
+      errors.push(
+        ...validateThinkingLevelMap(
+          model.thinkingLevelMap,
+          `提供商“${key}”、模型“${id}”`,
+        ),
+      );
     }
   }
   return errors;
@@ -87,6 +100,10 @@ export function validateModelsConfig(config: ModelsConfig): string[] {
  * Produce the object to write to models.json. Overlays edited known fields onto
  * the original so unknown fields (top-level, per-provider, per-model) are kept.
  * Providers/models absent from `edited` are dropped; new ones are added.
+ *
+ * `thinkingLevelMap` is editor-owned: when the edited model carries one it
+ * replaces the original outright (an empty map means "remove the optional
+ * field"), so a cleared mapping cannot re-merge from the old value.
  */
 export function mergeModelsConfig(
   original: ModelsConfig,
@@ -97,8 +114,20 @@ export function mergeModelsConfig(
     const origProv = original.providers?.[key] ?? {};
     const origModels = origProv.models ?? [];
     const mergedModels = (prov.models ?? []).map((m) => {
+      const { thinkingLevelMap: editedMap, ...restEdited } = m;
       const origModel = origModels.find((o) => o.id === m.id) ?? {};
-      return { ...origModel, ...m };
+      const merged: CustomModel = { ...origModel, ...restEdited };
+      if (editedMap !== undefined) {
+        const normalizedEntries = Object.entries(editedMap).filter(
+          ([, v]) => v !== undefined,
+        );
+        if (normalizedEntries.length > 0) {
+          merged.thinkingLevelMap = Object.fromEntries(normalizedEntries);
+        } else {
+          delete merged.thinkingLevelMap;
+        }
+      }
+      return merged;
     });
     result.providers[key] = { ...origProv, ...prov, models: mergedModels };
   }
