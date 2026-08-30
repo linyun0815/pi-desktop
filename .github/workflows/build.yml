@@ -58,9 +58,9 @@ jobs:
           node --test scripts/*.test.js >> test-output.log 2>&1
           node_exit=$?
           echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          strip() { grep -vE '^ *(---|type:|duration_ms:|failureType:|location:) *$'; }
-          { echo "== T272 UNC =="; grep -A 16 "not ok 272" test-output.log | strip | head -12
-            echo "== T121 TIMEOUT =="; grep -A 16 "not ok 121" test-output.log | strip | head -12; } > diag.log
+          strip() { grep -vE "^ *(---|type:|duration_ms:|failureType:|location:|stack:)" | grep -vE "^ *at "; }
+          { echo "== T272 UNC =="; grep -A 18 "not ok 272" test-output.log | strip | head -8
+            echo "== T121 TIMEOUT =="; grep -A 18 "not ok 121" test-output.log | strip | head -8; } > diag.log
           fold -s -w 470 diag.log | head -9 | while IFS= read -r line; do
             printf '::error::%s\n' "$line"
           done
