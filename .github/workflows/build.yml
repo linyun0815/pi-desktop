@@ -58,10 +58,13 @@ jobs:
           node --test scripts/*.test.js >> test-output.log 2>&1
           node_exit=$?
           echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          strip() { grep -vE "^ *(---|type:|duration_ms:|failureType:|location:|stack:)" | grep -vE "^ *at "; }
-          { echo "== T272 UNC =="; grep -A 18 "not ok 272" test-output.log | strip | head -8
-            echo "== T121 TIMEOUT =="; grep -A 18 "not ok 121" test-output.log | strip | head -8; } > diag.log
-          fold -s -w 470 diag.log | head -9 | while IFS= read -r line; do
+          {
+            echo "not_ok_count=$(grep -c 'not ok' test-output.log || true)"
+            echo "== timed-out request test =="
+            grep -A 20 "not ok.*timed-out request rejects" test-output.log | awk '/error: \|-/{f=4} f{print; f--}'
+            grep -A 20 "not ok.*timed-out request rejects" test-output.log | grep -E "actual:|expected:|operator:"
+          } > diag.log
+          head -9 diag.log | while IFS= read -r line; do
             printf '::error::%s\n' "$line"
           done
           [ "$tsx_exit" -eq 0 ] && [ "$node_exit" -eq 0 ]
