@@ -58,8 +58,7 @@ jobs:
           node --test scripts/*.test.js >> test-output.log 2>&1
           node_exit=$?
           echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          { echo "== FAILED TEST LINES =="; grep "not ok" test-output.log; echo "== LOG TAIL =="; } > diag.log
-          tail -c 4200 test-output.log >> diag.log
+          { echo "== ERR DETAIL: UNC test =="; grep -A 16 "not ok 272" test-output.log; echo "== ERR DETAIL: timeout test =="; grep -A 16 "not ok 121" test-output.log; } > diag.log
           fold -s -w 470 diag.log | head -9 | while IFS= read -r line; do
             printf '::error::%s\n' "$line"
           done
