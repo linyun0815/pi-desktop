@@ -60,9 +60,11 @@ jobs:
           echo "tsx_exit=$tsx_exit node_exit=$node_exit"
           {
             echo "not_ok_count=$(grep -c 'not ok' test-output.log || true)"
-            echo "== timed-out request test =="
-            grep -A 20 "not ok.*timed-out request rejects" test-output.log | awk '/error: \|-/{f=4} f{print; f--}'
-            grep -A 20 "not ok.*timed-out request rejects" test-output.log | grep -E "actual:|expected:|operator:"
+            while IFS= read -r line; do
+              echo "$line"
+              grep -A 12 -F "$line" test-output.log | awk '/error: \|-/{f=2} f{print; f--}' | head -2
+              grep -A 12 -F "$line" test-output.log | grep -E "actual:|expected:|operator:" | head -1
+            done < <(grep "not ok" test-output.log)
           } > diag.log
           head -9 diag.log | while IFS= read -r line; do
             printf '::error::%s\n' "$line"
