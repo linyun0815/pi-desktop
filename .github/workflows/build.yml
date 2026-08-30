@@ -47,27 +47,10 @@ jobs:
         # runner version supports, so enumerate files with `find` instead of
         # relying on the shell/runtime to expand the pattern. `resources/` holds
         # the shared permission-rules engine's tests, so include it too.
-        # TEMP DIAGNOSTIC: surface failureType + error message per failing test
-        # as ::error:: annotations (readable via the public Checks API).
-        shell: bash
-        run: |
-          set +e
-          npx --no-install tsx --test $(find src resources -name '*.test.ts') > test-output.log 2>&1
-          tsx_exit=$?
-          node --test scripts/*.test.js >> test-output.log 2>&1
-          node_exit=$?
-          echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          {
-            echo "not_ok_count=$(grep -c 'not ok' test-output.log || true)"
-            while IFS= read -r line; do
-              echo "$line"
-              grep -A 12 -F "$line" test-output.log | awk '/failureType:/{print} /error: \|-/{f=1; next} f{print; f--}' | head -3
-            done < <(grep "not ok" test-output.log)
-          } > diag.log
-          head -9 diag.log | while IFS= read -r line; do
-            printf '::error::%s\n' "$line"
-          done
-          [ "$tsx_exit" -eq 0 ] && [ "$node_exit" -eq 0 ]
+        run: >-
+          npx --no-install tsx --test
+          $(find src resources -name '*.test.ts') &&
+          node --test scripts/*.test.js
           [ "$tsx_exit" -eq 0 ] && [ "$node_exit" -eq 0 ]
 
   build:
