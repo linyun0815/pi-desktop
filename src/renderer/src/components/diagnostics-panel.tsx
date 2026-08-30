@@ -27,7 +27,7 @@ const TONE_TEXT: Record<Exclude<RowTone, "plain">, string> = {
   fail: "text-error",
 };
 
-/** Newest log entries shown in the Recent Errors section. */
+/** Newest log entries shown in the Recent Errors section (report arrives newest-first). */
 const MAX_VISIBLE_LOG_ENTRIES = 30;
 
 const KEY_STATE_LABELS: Record<string, { label: string; tone: RowTone }> = {
@@ -311,7 +311,7 @@ export function DiagnosticsPanel(): React.JSX.Element {
               ) : (
                 <div className="space-y-1">
                   {report.recentErrors
-                    .slice(-MAX_VISIBLE_LOG_ENTRIES)
+                    .slice(0, MAX_VISIBLE_LOG_ENTRIES)
                     .map((entry, index) => (
                       <LogEntryRow
                         key={`${entry.ts}-${index}`}

@@ -107,6 +107,7 @@ export async function collectDiagnostics(
       sessionsRoot,
       sessionsRootExists: existsSync(sessionsRoot),
     },
-    recentErrors: appLog.getRecent().filter((entry) => entry.level !== 'info'),
+    // Newest first so the diagnostics view reads like a log tail (getRecent is oldest-first).
+    recentErrors: [...appLog.getRecent()].reverse().filter((entry) => entry.level !== 'info'),
   }
 }
