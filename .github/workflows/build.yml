@@ -58,9 +58,10 @@ jobs:
           node --test scripts/*.test.js >> test-output.log 2>&1
           node_exit=$?
           echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          tail -c 8000 test-output.log
-          tail -c 6000 test-output.log | fold -s -w 900 | while IFS= read -r line; do
-            [ -n "$line" ] && printf '::error::%s\n' "$line"
+          { echo "== FAILED TEST LINES =="; grep "not ok" test-output.log; echo "== LOG TAIL =="; } > diag.log
+          tail -c 4200 test-output.log >> diag.log
+          fold -s -w 470 diag.log | head -9 | while IFS= read -r line; do
+            printf '::error::%s\n' "$line"
           done
           [ "$tsx_exit" -eq 0 ] && [ "$node_exit" -eq 0 ]
 
