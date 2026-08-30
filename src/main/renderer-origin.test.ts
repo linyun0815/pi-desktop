@@ -71,10 +71,22 @@ test("prod: rejects any other local file", () => {
 
 test("prod: keeps UNC renderer shares bound to the expected host", () => {
   const opts = { rendererIndexPath: "//server/share/app/index.html" };
-  assert.equal(
-    isTrustedRendererUrl("file://server/share/app/index.html#/chat", opts),
-    true,
-  );
+  if (process.platform === "win32") {
+    // On Windows pathToFileURL keeps the share host for a UNC path, so the
+    // same share matches and a different one is rejected.
+    assert.equal(
+      isTrustedRendererUrl("file://server/share/app/index.html#/chat", opts),
+      true,
+    );
+  } else {
+    // POSIX turns the double-slash path into a host-less file URL, so a
+    // frame URL claiming a host must never be trusted as the packaged
+    // renderer (pathToFileURL would throw on it).
+    assert.equal(
+      isTrustedRendererUrl("file://server/share/app/index.html#/chat", opts),
+      false,
+    );
+  }
   assert.equal(
     isTrustedRendererUrl("file://other/share/app/index.html", opts),
     false,
