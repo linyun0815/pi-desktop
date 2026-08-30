@@ -93,12 +93,22 @@ test("a timed-out request rejects and cannot be completed afterwards", async () 
   const manager = new EmbeddedPiAdminManager({ cwd: () => "/tmp" });
   const { internals, sent } = withFakeChild(manager);
 
-  const promise = internals.request(
-    { kind: "adminNpmAvailable" },
-    "tool_availability",
-    15,
-  );
-  await assert.rejects(promise, /timed out/);
+  // The request timer is unref()d so a pending timeout never keeps the real
+  // helper alive; in a test the event loop can drain before it fires and the
+  // runner cancels the await (cancelledByParent). Hold a ref'd handle until
+  // the rejection lands.
+  const keepAlive = setInterval(() => {}, 1_000_000);
+  try {
+    const promise = internals.request(
+      { kind: "adminNpmAvailable" },
+      "tool_availability",
+      15,
+    );
+    await assert.rejects(promise, /timed out/);
+  } finally {
+    clearInterval(keepAlive);
+  }
+
   // A late response for the same id finds no pending entry: no double settle.
   internals.handleMessage({
     kind: "adminResponse",

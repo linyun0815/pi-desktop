@@ -47,27 +47,10 @@ jobs:
         # runner version supports, so enumerate files with `find` instead of
         # relying on the shell/runtime to expand the pattern. `resources/` holds
         # the shared permission-rules engine's tests, so include it too.
-        # TEMP DIAGNOSTIC: tee the output tail into ::error:: annotations so the
-        # failure is readable via the public Checks API without repo admin.
-        shell: bash
-        run: |
-          set +e
-          node --version
-          npx --no-install tsx --test $(find src resources -name '*.test.ts') > test-output.log 2>&1
-          tsx_exit=$?
-          node --test scripts/*.test.js >> test-output.log 2>&1
-          node_exit=$?
-          echo "tsx_exit=$tsx_exit node_exit=$node_exit"
-          {
-            echo "not_ok_count=$(grep -c 'not ok' test-output.log || true)"
-            echo "== RAW BLOCK after timed-out request =="
-            grep -A 12 -F "a timed-out request rejects" test-output.log | tail -n +2 | head -6
-            echo "== LOG TAIL =="
-            tail -4 test-output.log
-          } > diag.log
-          head -9 diag.log | while IFS= read -r line; do
-            printf '::error::%s\n' "$line"
-          done
+        run: >-
+          npx --no-install tsx --test
+          $(find src resources -name '*.test.ts') &&
+          node --test scripts/*.test.js
           [ "$tsx_exit" -eq 0 ] && [ "$node_exit" -eq 0 ]
 
   build:
